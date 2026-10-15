@@ -1,0 +1,122 @@
+[
+ {
+  "error": null,
+  "options": {
+   "stride": null,
+   "target_fps": 10,
+   "imgsz": 1920,
+   "conf": 0.25,
+   "kp_conf": 0.5,
+   "kp_correction": true,
+   "flat_ground": true,
+   "max_range_m": 40
+  },
+  "image_size": [
+   1920,
+   1080
+  ],
+  "n_frames": 1800,
+  "duration_s": 60,
+  "media_url": "/api/jobs/mock-running/media",
+  "result_url": null,
+  "source": "ios",
+  "id": "mock-running",
+  "name": "Parking lot run 3",
+  "kind": "video",
+  "status": "running",
+  "stage": "detecting",
+  "progress": 0.42,
+  "created_at": "2026-10-15T19:13:26.769Z",
+  "updated_at": "2026-10-15T19:14:54.769Z"
+ },
+ {
+  "error": null,
+  "options": {
+   "stride": null,
+   "target_fps": 10,
+   "imgsz": 1920,
+   "conf": 0.25,
+   "kp_conf": 0.5,
+   "kp_correction": true,
+   "flat_ground": true,
+   "max_range_m": 40
+  },
+  "image_size": [
+   1920,
+   1080
+  ],
+  "n_frames": 1800,
+  "duration_s": 60,
+  "media_url": "/api/jobs/mock-video/media",
+  "result_url": "/api/jobs/mock-video/result",
+  "source": "ios",
+  "id": "mock-video",
+  "name": "Autocross lap (mock)",
+  "kind": "video",
+  "status": "done",
+  "stage": "writing",
+  "progress": 1,
+  "created_at": "2026-10-15T18:14:56.769Z",
+  "updated_at": "2026-10-15T18:16:36.769Z"
+ },
+ {
+  "error": null,
+  "options": {
+   "stride": null,
+   "target_fps": 10,
+   "imgsz": 1920,
+   "conf": 0.25,
+   "kp_conf": 0.5,
+   "kp_correction": true,
+   "flat_ground": true,
+   "max_range_m": 40
+  },
+  "image_size": [
+   1920,
+   1080
+  ],
+  "n_frames": 1,
+  "duration_s": null,
+  "media_url": "/api/jobs/mock-photo/media",
+  "result_url": "/api/jobs/mock-photo/result",
+  "source": "web",
+  "id": "mock-photo",
+  "name": "Straight, 5-30 m (mock)",
+  "kind": "photo",
+  "status": "done",
+  "stage": "writing",
+  "progress": 1,
+  "created_at": "2026-10-15T17:14:56.769Z",
+  "updated_at": "2026-10-15T17:15:06.769Z"
+ },
+ {
+  "error": "Could not decode video: moov atom not found",
+  "options": {
+   "stride": null,
+   "target_fps": 10,
+   "imgsz": 1920,
+   "conf": 0.25,
+   "kp_conf": 0.5,
+   "kp_correction": true,
+   "flat_ground": true,
+   "max_range_m": 40
+  },
+  "image_size": [
+   1920,
+   1080
+  ],
+  "n_frames": null,
+  "duration_s": null,
+  "media_url": null,
+  "result_url": null,
+  "source": "web",
+  "id": "mock-failed",
+  "name": "Broken upload",
+  "kind": "video",
+  "status": "failed",
+  "stage": "decoding",
+  "progress": 0.05,
+  "created_at": "2026-10-14T19:14:56.769Z",
+  "updated_at": "2026-10-14T19:16:36.769Z"
+ }
+]

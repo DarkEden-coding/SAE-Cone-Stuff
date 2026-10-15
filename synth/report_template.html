@@ -1,0 +1,161 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cone pose error — YOLO26 pose + PnP on synthetic set</title>
+<style>
+:root{--d-surface:#fcfcfb;--d-ink:#0b0b0b;--d-ink2:#52514e;--d-grid:#e4e3df}
+@media (prefers-color-scheme:dark){:root{--d-surface:#1a1a19;--d-ink:#f0efec;--d-ink2:#c3c2b7;--d-grid:#33332f}}
+html,body{background:var(--background,var(--d-surface));color:var(--foreground,var(--d-ink))}
+.viz-root{--surface:var(--background,var(--d-surface));--ink:var(--foreground,var(--d-ink));--ink2:var(--muted-foreground,var(--d-ink2));
+  --grid:var(--border,var(--d-grid));font-family:var(--font-sans,system-ui,sans-serif);color:var(--ink);
+  font-size:14px;line-height:1.45;max-width:1100px}
+.viz-root h2{font-size:15px;margin:28px 0 2px;font-weight:600}
+.viz-root .sub{color:var(--ink2);font-size:12.5px;margin:0 0 8px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px 28px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:6px 0 4px}
+.tile{border:1px solid var(--grid);border-radius:var(--radius,8px);padding:10px 14px}
+.tile .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}.tile .l{color:var(--ink2);font-size:12px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2);margin:4px 0}
+.legend span{display:inline-flex;align-items:center;gap:6px}.sw{width:14px;height:3px;border-radius:2px;display:inline-block}
+.filters{display:flex;gap:8px;align-items:center;margin:14px 0 0;font-size:13px;color:var(--ink2)}
+.seg{display:inline-flex;border:1px solid var(--grid);border-radius:6px;overflow:hidden}
+.seg button{background:none;border:0;padding:4px 10px;color:var(--ink2);font:inherit;cursor:pointer}
+.seg button.on{background:var(--grid);color:var(--ink);font-weight:600}
+table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums;margin-top:6px}
+th,td{padding:4px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+th{color:var(--ink2);font-weight:500}td:first-child,th:first-child{text-align:left}
+.tablewrap{overflow-x:auto}
+.tip{position:fixed;pointer-events:none;background:var(--popover,var(--d-surface));color:var(--popover-foreground,var(--d-ink));border:1px solid var(--grid);
+  border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;z-index:10;max-width:260px}
+svg text{font-family:inherit}
+.note{color:var(--ink2);font-size:12.5px;margin:6px 0}
+</style></head>
+<body><div class="viz-root" id="root">
+<div class="tiles" id="tiles"></div>
+
+<h2>Latency vs pose error</h2>
+<p class="sub">Each point is one model at one input size (640–1280 px). Median end-to-end latency, batch 1, RTX 5060. Error uses the cones every configuration solved (2–30 m), so sizes compare on equal footing; success uses all cones at 2–30 m. Along each line, points run 640 → 800 → 960 → 1280 px from left to right.</p>
+<div class="legend" id="lg1"></div>
+<div class="grid2"><div><div class="sub">Median relative translation error, common cone set (% of distance)</div><div id="c1"></div></div>
+<div><div class="sub">End-to-end success (detected and PnP solved)</div><div id="c2"></div></div></div>
+
+<div class="filters">Input size <div class="seg" id="seg"></div></div>
+<h2>Error by distance</h2>
+<p class="sub">All detectable cones, including 30–60 m. The gray line is the same PnP on ground-truth keypoints: the error the fixed cone model alone contributes.</p>
+<div class="legend" id="lg2"></div>
+<div class="grid2"><div><div class="sub">Median translation error (m)</div><div id="c3"></div></div>
+<div><div class="sub">Success rate</div><div id="c4"></div></div></div>
+<div class="grid2"><div><h2>Error distribution</h2><p class="sub">Cumulative share of solved cones (2–30 m) under a relative error</p><div id="c5"></div></div>
+<div><h2>Where the error goes</h2><p class="sub">Median error components, 2–30 m (m). Range = along the viewing ray, lateral = across it; range bias is signed (positive = estimated too far).</p><div id="c6"></div></div></div>
+
+<h2>All configurations</h2><p class="sub">2–30 m detectable cones. Outlier = relative error over 10%.</p>
+<div class="tablewrap"><table id="t1"></table></div>
+<h2>By condition</h2><p class="sub">Selected input size, 2–30 m: median relative error / success rate.</p>
+<div class="tablewrap"><table id="t2"></table></div>
+<p class="note" id="def"></p>
+<div class="tip" id="tip"></div>
+</div>
+<script>
+const D=/*DATA*/null;
+const MODELS=['nano','small','medium'];
+let size=960;
+const $=id=>document.getElementById(id);
+function isDark(){const c=getComputedStyle(document.body).backgroundColor.match(/\d+(\.\d+)?/g);if(!c)return matchMedia('(prefers-color-scheme: dark)').matches;
+  const [r,g,b,a]=c.map(Number);if(a===0)return matchMedia('(prefers-color-scheme: dark)').matches;return (0.299*r+0.587*g+0.114*b)<128}
+const PAL=()=>isDark()?['#3987e5','#d95926','#199e70']:['#2a78d6','#eb6834','#1baf7a'];
+const css=v=>getComputedStyle($('root')).getPropertyValue(v).trim();
+const cfg=(m,s)=>D.configs.find(c=>c.model===m&&c.imgsz===s);
+const fmt=(v,d=1)=>v==null||isNaN(v)?'–':v.toFixed(d);
+const pct=(v,d=1)=>v==null?'–':(100*v).toFixed(d)+'%';
+const NS='http://www.w3.org/2000/svg';
+function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p&&p.appendChild(e);return e}
+function nice(lo,hi,n=5){const s=(hi-lo)/n,m=Math.pow(10,Math.floor(Math.log10(s))),st=[1,2,2.5,5,10].map(x=>x*m).find(x=>x>=s);
+  const a=Math.floor(lo/st)*st,b=Math.ceil(hi/st)*st,t=[];for(let v=a;v<=b+st/2;v+=st)t.push(+v.toFixed(10));return t}
+const tip=$('tip');
+function chart(host,o){
+  host.innerHTML='';const W=host.clientWidth||520,H=o.h||250,m={l:50,r:o.r??64,t:10,b:36};
+  const svg=el('svg',{width:W,height:H},host),iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const pts=o.series.flatMap(s=>s.points);
+  const xs=o.xCats?null:pts.map(p=>p.x),ys=pts.map(p=>p.y).filter(v=>v!=null);
+  const yt=nice(o.yMin??Math.min(...ys),o.yMax??Math.max(...ys));
+  const xt=o.xCats?null:nice(o.xMin??Math.min(...xs),Math.max(...xs));
+  const X=o.xCats?(i=>m.l+(i+0.5)*iw/o.xCats.length):(v=>m.l+(v-xt[0])/(xt.at(-1)-xt[0])*iw);
+  const Y=v=>m.t+ih-(v-yt[0])/(yt.at(-1)-yt[0])*ih;
+  const grid=css('--grid'),ink2=css('--ink2'),surf=getComputedStyle(document.body).backgroundColor||'#fff';
+  yt.forEach(v=>{el('line',{x1:m.l,x2:m.l+iw,y1:Y(v),y2:Y(v),stroke:grid,'stroke-width':1},svg);
+    const t=el('text',{x:m.l-6,y:Y(v)+4,'text-anchor':'end','font-size':11,fill:ink2},svg);t.textContent=o.yFmt?o.yFmt(v):v});
+  (o.xCats||xt).forEach((v,i)=>{const t=el('text',{x:o.xCats?X(i):X(v),y:m.t+ih+16,'text-anchor':'middle','font-size':11,fill:ink2},svg);t.textContent=o.xCats?v:(o.xFmt?o.xFmt(v):v)});
+  const xl=el('text',{x:m.l+iw/2,y:H-4,'text-anchor':'middle','font-size':11.5,fill:ink2},svg);xl.textContent=o.xLabel;
+  const hit=[];
+  o.series.forEach(s=>{const P=s.points.filter(p=>p.y!=null).map(p=>({...p,sx:o.xCats?X(p.x):X(p.x),sy:Y(p.y)}));
+    if(P.length>1)el('path',{d:P.map((p,i)=>(i?'L':'M')+p.sx+','+p.sy).join(''),fill:'none',stroke:s.color,'stroke-width':s.w||2,'stroke-linejoin':'round','stroke-linecap':'round'},svg);
+    if(!s.noDots)P.forEach(p=>{el('circle',{cx:p.sx,cy:p.sy,r:4.5,fill:s.color,stroke:surf,'stroke-width':2},svg);hit.push({...p,s})});
+    else P.forEach(p=>hit.push({...p,s}));
+    P.forEach(p=>{if(p.label){const t=el('text',{x:p.sx+(p.lx||7),y:p.sy+(p.ly||4),'font-size':10.5,fill:ink2},svg);t.textContent=p.label}});
+    if(s.endLabel&&P.length){const p=P.at(-1);const t=el('text',{x:p.sx+8,y:p.sy+4+(s.dy||0),'font-size':11.5,fill:css('--ink')},svg);t.textContent=s.name}});
+  svg.addEventListener('mousemove',e=>{const r=svg.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;let b=null,bd=900;
+    hit.forEach(h=>{const d=(h.sx-mx)**2+(h.sy-my)**2;if(d<bd){bd=d;b=h}});
+    if(!b){tip.style.display='none';return}
+    tip.innerHTML=`<div style="display:flex;align-items:center;gap:6px;font-weight:600"><span class="sw" style="background:${b.s.color}"></span>${b.s.name}</div>${b.tip}`;
+    tip.style.display='block';tip.style.left=Math.min(e.clientX+14,innerWidth-270)+'px';tip.style.top=(e.clientY+14)+'px'});
+  svg.addEventListener('mouseleave',()=>tip.style.display='none');
+}
+function bars(host,o){
+  host.innerHTML='';const W=host.clientWidth||520,H=250,m={l:50,r:12,t:16,b:36},iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const svg=el('svg',{width:W,height:H},host),grid=css('--grid'),ink2=css('--ink2'),ink=css('--ink');
+  const vals=o.series.flatMap(s=>s.values),yt=nice(Math.min(0,...vals),Math.max(...vals));
+  const Y=v=>m.t+ih-(v-yt[0])/(yt.at(-1)-yt[0])*ih,band=iw/o.cats.length,bw=Math.min(24,(band*0.7-2*(o.series.length-1))/o.series.length);
+  yt.forEach(v=>{el('line',{x1:m.l,x2:m.l+iw,y1:Y(v),y2:Y(v),stroke:grid,'stroke-width':1},svg);
+    const t=el('text',{x:m.l-6,y:Y(v)+4,'text-anchor':'end','font-size':11,fill:ink2},svg);t.textContent=v.toFixed(2)});
+  const hit=[];
+  o.cats.forEach((c,i)=>{const gx=m.l+i*band+band/2-(o.series.length*bw+2*(o.series.length-1))/2;
+    const t=el('text',{x:m.l+i*band+band/2,y:m.t+ih+16,'text-anchor':'middle','font-size':11,fill:ink2},svg);t.textContent=c;
+    o.series.forEach((s,j)=>{const v=s.values[i],x=gx+j*(bw+2),y0=Y(0),y1=Y(v),h=Math.abs(y0-y1),top=Math.min(y0,y1),r=Math.min(4,h/2);
+      const up=v>=0,d=up?`M${x},${y0}V${top+r}Q${x},${top} ${x+r},${top}H${x+bw-r}Q${x+bw},${top} ${x+bw},${top+r}V${y0}Z`
+                     :`M${x},${y0}V${top+h-r}Q${x},${top+h} ${x+r},${top+h}H${x+bw-r}Q${x+bw},${top+h} ${x+bw},${top+h-r}V${y0}Z`;
+      el('path',{d,fill:s.color},svg);hit.push({x,y:top,w:bw,h:Math.max(h,6),s,tip:`${c}: ${v.toFixed(3)} m`})})});
+  svg.addEventListener('mousemove',e=>{const r=svg.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    const b=hit.find(h=>mx>=h.x-2&&mx<=h.x+h.w+2&&my>=h.y-6&&my<=h.y+h.h+6);if(!b){tip.style.display='none';return}
+    tip.innerHTML=`<div style="display:flex;align-items:center;gap:6px;font-weight:600"><span class="sw" style="background:${b.s.color}"></span>${b.s.name}</div>${b.tip}`;
+    tip.style.display='block';tip.style.left=Math.min(e.clientX+14,innerWidth-270)+'px';tip.style.top=(e.clientY+14)+'px'});
+  svg.addEventListener('mouseleave',()=>tip.style.display='none');
+}
+function legend(id,items){$(id).innerHTML=items.map(([n,c])=>`<span><i class="sw" style="background:${c}"></i>${n}</span>`).join('')}
+function tipCfg(c){return `${c.imgsz} px · ${fmt(c.latency_median_ms)} ms (p95 ${fmt(c.latency_p95_ms)})<br>common-set error ${fmt(c.common_rel_err_median_pct,2)}% [95% CI ${fmt(c.common_rel_err_ci95[0],2)}–${fmt(c.common_rel_err_ci95[1],2)}]<br>all solved: ${fmt(c.t_err_median_m,3)} m · ${fmt(c.rel_err_median_pct,2)}%<br>success ${pct(c.success)} · outliers ${pct(c.outlier_rate)}`}
+function render(){
+  const P=PAL(),col=Object.fromEntries(MODELS.map((m,i)=>[m,P[i]])),gray=css('--ink2');
+  const best=D.configs.filter(c=>c.imgsz===960);
+  const bl=D.baselines.gt_kp_planar;
+  $('tiles').innerHTML=[
+    ...best.map(c=>[`${fmt(c.common_rel_err_median_pct,2)}%`,`${c.model} @960 median error · ${fmt(c.latency_median_ms)} ms · ${pct(c.success,0)} solved`]),
+    [`${fmt(bl.rel_err_median_pct,3)}%`,'fixed-model floor (GT keypoints)']].map(([v,l])=>`<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+  legend('lg1',MODELS.map(m=>[m,col[m]]));
+  const lat=m=>D.configs.filter(c=>c.model===m).sort((a,b)=>a.imgsz-b.imgsz);
+  const lab=(c,arr)=>c===arr.at(-1)?String(c.imgsz):'';
+  chart($('c1'),{series:MODELS.map(m=>{const a=lat(m);return{name:m,color:col[m],endLabel:true,points:a.map(c=>({x:c.latency_median_ms,y:c.common_rel_err_median_pct,label:lab(c,a),ly:-8,lx:-10,tip:tipCfg(c)}))}}),
+    xLabel:'median latency (ms)',yFmt:v=>v+'%',r:62,yMin:3,yMax:4.2});
+  chart($('c2'),{series:MODELS.map(m=>{const a=lat(m);return{name:m,color:col[m],endLabel:true,points:a.map(c=>({x:c.latency_median_ms,y:100*c.success,label:lab(c,a),ly:-8,lx:-10,tip:tipCfg(c)}))}}),
+    xLabel:'median latency (ms)',yFmt:v=>v+'%',r:62});
+  $('seg').innerHTML=[640,800,960,1280].map(s=>`<button class="${s===size?'on':''}" data-s="${s}">${s}</button>`).join('');
+  $('seg').querySelectorAll('button').forEach(b=>b.onclick=()=>{size=+b.dataset.s;render()});
+  const bins=Object.keys(D.configs[0].by_range);
+  legend('lg2',[...MODELS.map(m=>[`${m} @${size}`,col[m]]),['GT keypoints (planar model)',gray]]);
+  const rs=(m,k,sc=1)=>bins.map((b,i)=>{const s=cfg(m,size).by_range[b];return{x:i,y:s[k]==null?null:s[k]*sc,tip:`${b} m · n=${s.n}<br>median error ${fmt(s.t_err_median_m,3)} m (${fmt(s.rel_err_median_pct,2)}%)<br>success ${pct(s.success)} · recall ${pct(s.recall)}`}});
+  chart($('c3'),{series:[...MODELS.map(m=>({name:m,color:col[m],points:rs(m,'t_err_median_m')})),
+    {name:'GT keypoints',color:gray,w:1.5,points:bins.map((b,i)=>({x:i,y:bl.by_range[b].t_err_median_m,tip:`${b} m · median ${fmt(bl.by_range[b].t_err_median_m,4)} m`}))}],
+    xCats:bins.map(b=>b+' m'),yMin:0,r:12,xLabel:'ground range',yFmt:v=>v.toFixed(2)});
+  chart($('c4'),{series:MODELS.map(m=>({name:m,color:col[m],points:rs(m,'success',100)})),xCats:bins.map(b=>b+' m'),r:12,xLabel:'ground range',yFmt:v=>v+'%',yMax:100});
+  chart($('c5'),{series:MODELS.map(m=>{const c=cfg(m,size);return{name:m,color:col[m],noDots:true,endLabel:false,
+    points:c.rel_err_cdf_pct.filter(p=>p[0]<=12).map(([x,q])=>({x,y:100*q,tip:`${fmt(100*q,0)}% of cones under ${fmt(x,2)}%`}))}}),
+    xLabel:'relative translation error (%)',yFmt:v=>v+'%',yMin:0,yMax:100,xMin:0,r:12});
+  const comps=[['range |err|','range_err_median_abs_m'],['range bias','range_bias_median_m'],['lateral','lat_err_median_m'],['ground plane','ground_err_median_m']];
+  bars($('c6'),{cats:comps.map(c=>c[0]),series:MODELS.map(m=>({name:m,color:col[m],values:comps.map(([n,k])=>cfg(m,size)[k])}))});
+  const H=['model','size','latency med','p95','PnP ms','recall','success','common rel [95% CI]','median err','p90 err','median rel','p90 rel','outliers','range bias','axis err','kp err'];
+  $('t1').innerHTML='<tr>'+H.map(h=>`<th>${h}</th>`).join('')+'</tr>'+D.configs.map(c=>`<tr><td>${c.model}</td><td>${c.imgsz}</td><td>${fmt(c.latency_median_ms)} ms</td><td>${fmt(c.latency_p95_ms)}</td><td>${fmt(c.pnp_median_ms,2)}</td><td>${pct(c.recall)}</td><td>${pct(c.success)}</td><td>${fmt(c.common_rel_err_median_pct,2)}% [${fmt(c.common_rel_err_ci95[0],2)}–${fmt(c.common_rel_err_ci95[1],2)}]</td><td>${fmt(c.t_err_median_m,3)} m</td><td>${fmt(c.t_err_p90_m,2)} m</td><td>${fmt(c.rel_err_median_pct,2)}%</td><td>${fmt(c.rel_err_p90_pct,1)}%</td><td>${pct(c.outlier_rate)}</td><td>${fmt(c.range_bias_median_m,3)} m</td><td>${fmt(c.axis_err_median_deg,1)}°</td><td>${fmt(c.kp_err_median_px,2)} px</td></tr>`).join('')
+    +['gt_kp_planar','gt_kp_exact'].map(b=>{const c=D.baselines[b];return `<tr><td>${b==='gt_kp_planar'?'GT keypoints, planar model':'GT keypoints, exact points'}</td><td>–</td><td>–</td><td>–</td><td>–</td><td>–</td><td>${pct(c.success)}</td><td>–</td><td>${fmt(c.t_err_median_m,4)} m</td><td>${fmt(c.t_err_p90_m,3)} m</td><td>${fmt(c.rel_err_median_pct,3)}%</td><td>${fmt(c.rel_err_p90_pct,2)}%</td><td>${pct(c.outlier_rate)}</td><td>${fmt(c.range_bias_median_m,4)} m</td><td>${fmt(c.axis_err_median_deg,2)}°</td><td>–</td></tr>`}).join('');
+  const groups=[['class','by_class'],['car','by_context'],['defects','by_severity'],['occlusion','by_occlusion']];
+  const keys=groups.flatMap(([g,k])=>Object.keys(cfg('nano',size)[k]).map(n=>[g,k,n]));
+  $('t2').innerHTML='<tr><th>condition</th><th>n</th>'+MODELS.map(m=>`<th>${m}</th>`).join('')+'</tr>'+keys.map(([g,k,n])=>`<tr><td>${g}: ${n.replace('_',' ')}</td><td>${cfg('nano',size)[k][n].n}</td>`+MODELS.map(m=>{const s=cfg(m,size)[k][n];return `<td>${fmt(s.rel_err_median_pct,2)}% / ${pct(s.success,0)}</td>`}).join('')+'</tr>').join('');
+  $('def').textContent=D.eval_definition;
+}
+render();addEventListener('resize',render);
+new MutationObserver(render).observe(document.documentElement,{attributes:true,attributeFilter:['class','style','data-theme']});
+</script></body></html>

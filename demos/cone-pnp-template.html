@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cone keypoints → 3D positions</title>
+<style>
+:root{
+  --bg:#0a0d13;--panel:#11161f;--panel-2:#161c27;--line:#232b38;--line-2:#2e3846;
+  --text:#e8edf4;--dim:#8b96a8;--faint:#5c6778;--accent:#5eb3ff;--warn:#f2c14e;
+  --blue:#3b8cff;--yellow:#ffd23f;--orange:#ff8a3d;--orange-big:#ff6a2b;--other:#b8c0cc;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text)}
+body{padding:28px clamp(16px,3vw,40px) 40px;max-width:1800px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;margin-bottom:20px}
+h1{font-size:22px;font-weight:650;letter-spacing:-.01em;margin:0 0 6px}
+header p{margin:0;color:var(--dim);font-size:13.5px;line-height:1.5;max-width:720px}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{background:none;border:0;color:var(--dim);font:inherit;font-size:13px;padding:7px 14px;border-radius:7px;cursor:pointer}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:var(--panel-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--line-2)}
+.btn{background:var(--panel);border:1px solid var(--line);color:var(--text);font:inherit;font-size:13px;padding:8px 13px;border-radius:9px;cursor:pointer}
+.btn:hover{border-color:var(--line-2);background:var(--panel-2)}
+.toggle{display:inline-flex;gap:7px;align-items:center;font-size:13px;color:var(--dim);cursor:pointer;padding:0 6px;user-select:none}
+.toggle input{accent-color:var(--accent)}
+.split{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.panel-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+.panel-head h2{font-size:13px;font-weight:600;margin:0;letter-spacing:.02em;text-transform:uppercase;color:var(--dim)}
+.panel-head span{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+canvas{display:block;width:100%;height:clamp(340px,44vw,560px)}
+#image{background:#06080c;cursor:zoom-in;touch-action:none}
+#image.zoomed{cursor:grab}#image.dragging{cursor:grabbing}
+.head-tools{display:flex;gap:6px;align-items:center}
+.mini{background:var(--panel-2);border:1px solid var(--line);color:var(--dim);font:inherit;font-size:11.5px;padding:4px 9px;border-radius:7px;cursor:pointer;font-variant-numeric:tabular-nums}
+.mini:hover{color:var(--text);border-color:var(--line-2)}
+.mini:disabled{opacity:.4;cursor:default}
+#view{background:radial-gradient(ellipse at 50% 30%,#141b27 0%,#0b0f16 70%);cursor:grab;touch-action:none}
+#view.dragging{cursor:grabbing}
+.panel-foot{padding:9px 16px;font-size:11.5px;color:var(--faint);border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.legend{display:flex;gap:14px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:0}
+.bottom{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;margin-top:16px}
+.cones{display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
+.chip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);color:var(--text);font:inherit;font-size:12px;padding:6px 10px 6px 8px;border-radius:999px;cursor:pointer;font-variant-numeric:tabular-nums}
+.chip:hover{border-color:var(--line-2)}
+.chip.on{border-color:var(--accent);background:#14253a}
+.chip.off{opacity:.5}
+.chip i{width:9px;height:9px;border-radius:50%}
+.chip small{color:var(--faint)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.card .title{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px;margin-bottom:14px}
+.card .title i{width:11px;height:11px;border-radius:50%}
+.card .title small{font-weight:400;color:var(--dim);font-size:12.5px;margin-left:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:12px}
+.stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);margin-bottom:3px}
+.stat .v{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat .v small{font-size:12px;color:var(--dim);font-weight:400;margin-left:2px}
+.reject{color:var(--dim);font-size:13px;line-height:1.5}
+details{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:4px 16px}
+summary{cursor:pointer;font-size:13px;color:var(--dim);padding:10px 0}
+details p{font-size:12.5px;line-height:1.65;color:var(--dim);margin:4px 0 12px}
+.pill{display:inline-block;font-size:11px;color:var(--warn);border:1px solid #4a3d1c;background:#1d1809;padding:3px 9px;border-radius:999px}
+@media(max-width:900px){.split,.bottom{grid-template-columns:1fr}canvas{height:340px}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Cone keypoints → estimated 3D positions</h1>
+    <p>Pose-model predictions on three training frames. Each cone's band/base keypoints are solved with PnP, then placed on a fitted ground plane. Click a cone in either view to link them.</p>
+  </div>
+  <div class="controls">
+    <div class="seg" id="scenes" role="tablist"></div>
+    <button class="btn" id="reset">Reset view</button>
+    <label class="toggle"><input type="checkbox" id="numbers" checked> Keypoint indices</label>
+  </div>
+</header>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head"><h2>2D detections</h2><div class="head-tools"><span id="imageinfo"></span><button class="mini" id="zoomcone" title="Zoom to the selected cone (or double-click a detection)">Zoom to cone</button><button class="mini" id="zoomfit" title="Show the whole frame (or double-click empty space)">Fit · <span id="zoomlvl">1.0×</span></button></div></div>
+    <canvas id="image"></canvas>
+    <div class="panel-foot"><div class="legend" id="legend"></div><span>Scroll to zoom · drag to pan · double-click a cone to zoom in · <span id="fname"></span></span></div>
+  </section>
+  <section class="panel">
+    <div class="panel-head"><h2>3D · ground frame</h2><span id="solvecount"></span></div>
+    <canvas id="view"></canvas>
+    <div class="panel-foot"><span>Drag to orbit · scroll to zoom · click a cone to select</span><span>Grid 1 m · cones drawn 2× size</span></div>
+  </section>
+</div>
+
+<div class="bottom">
+  <div class="cones" id="cones"></div>
+  <div class="card" id="details"></div>
+</div>
+
+<details>
+  <summary>Geometry, calibration &amp; solve assumptions <span class="pill">assumed calibration · illustrative distances</span></summary>
+  <p id="calibration"></p>
+  <p>Keypoint geometry is measured from the BRT training labels (median over ~8k boxes ≥90 px tall), as heights and half-widths relative to box height, then scaled to FS cone heights. Small cones (0.325 m): pairs 0/1, 2/3, 4/5 at 0.228, 0.150, 0.064 m with half-widths 0.040, 0.054, 0.075 m — stripe top, stripe bottom, body foot. Big orange cones (0.505 m) use all eight points: pairs 0/1…6/7 at 0.380, 0.300, 0.220, 0.140 m with half-widths 0.042, 0.053, 0.060, 0.070 m — the edges of the two white stripes. The solved origin is the cone's ground point.</p>
+  <p>Each cone is solved with OpenCV planar PnP (IPPE), keeping the positive-depth candidate with lowest reprojection error. A solve needs ≥4 confident points, box height ≥12 px, depth &lt;80 m and RMS ≤ max(3 px, 10% of box height).</p>
+  <p>The viewer fits a ground plane through the solved base centres (least squares, tilt-limited) and re-expresses everything in that frame, so the camera's pitch is removed and cones stand upright. The per-cone PnP rotation is not used: a camera-facing planar proxy makes it unreliable. Distances depend on the assumed intrinsics and cone sizes; use measured calibration for real localization.</p>
+</details>
+
+<script>
+const DATA=__DATA__;
+const COLORS=['#3b8cff','#ff6a2b','#ff8a3d','#b8c0cc','#ffd23f'];
+// body / stripe colours per class (dataset ids): blue, orange_big, orange, undefined, yellow
+const PAINT=[['#2f6fd8','#f2f4f7'],['#ff6a1f','#f2f4f7'],['#ff7a26','#f2f4f7'],['#9aa3b0','#e0e4ea'],['#ffcf1f','#1c1d21']];
+const VIS=2; // cone meshes drawn 2x real size so they read at track scale
+const LABEL=['Blue','Big orange','Orange','Other','Yellow'];
+const $=s=>document.getElementById(s);
+let scene=0,selected=null,img=new Image(),world=null;
+const VIEW0={yaw:-0.5,pitch:0.62,dist:1};let view={...VIEW0};
+
+// ---------- small vector helpers ----------
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const mul=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const norm=a=>mul(a,1/Math.hypot(...a));
+
+// ---------- ground plane: camera frame (X right, Y down, Z fwd) -> ground frame (X right, Y up, Z fwd) ----------
+function buildWorld(s){
+  const cones=s.cones.filter(c=>c.pose),P=cones.map(c=>c.pose.t);
+  let down=[0,1,0],c0=null;
+  if(P.length>=3){
+    // least squares Y = aX + bZ + c
+    let S=[[0,0,0],[0,0,0],[0,0,0]],r=[0,0,0];
+    P.forEach(p=>{const v=[p[0],p[2],1];for(let i=0;i<3;i++){r[i]+=v[i]*p[1];for(let j=0;j<3;j++)S[i][j]+=v[i]*v[j]}});
+    const sol=solve3(S,r);
+    if(sol){const n=norm([-sol[0],1,-sol[1]]);if(n[1]>Math.cos(35*Math.PI/180)){down=n;c0=sol[2]}}
+  }
+  if(c0===null){ // fall back to average solved cone axis (object +Y points down the cone)
+    let m=[0,0,0];cones.forEach(c=>{m=add(m,[c.pose.R[0][1],c.pose.R[1][1],c.pose.R[2][1]])});
+    if(cones.length&&Math.hypot(...m)>0)down=norm(m);
+  }
+  const up=mul(down,-1),fwd=norm(sub([0,0,1],mul(up,up[2]))),right=cross(fwd,up);
+  // camera height = mean distance of bases below camera along "down"
+  const camH=P.length?P.reduce((a,p)=>a+dot(p,down),0)/P.length:1;
+  const toG=p=>[dot(p,right),dot(p,up)+camH,dot(p,fwd)];
+  const items=cones.map(c=>{const g=toG(c.pose.t);return{c,g,base:[g[0],0,g[2]],H:c.pose.height}});
+  const tilt=Math.acos(Math.min(1,down[1]))*180/Math.PI;
+  return{items,camH,tilt,cam:[0,camH,0]};
+}
+function solve3(A,b){
+  const m=A.map((r,i)=>[...r,b[i]]);
+  for(let i=0;i<3;i++){let p=i;for(let k=i+1;k<3;k++)if(Math.abs(m[k][i])>Math.abs(m[p][i]))p=k;[m[i],m[p]]=[m[p],m[i]];if(Math.abs(m[i][i])<1e-9)return null;
+    for(let k=0;k<3;k++)if(k!==i){const f=m[k][i]/m[i][i];for(let j=i;j<4;j++)m[k][j]-=f*m[i][j]}}
+  return m.map((r,i)=>r[3]/r[i]);
+}
+
+// ---------- canvas sizing ----------
+function fit(c){const r=c.getBoundingClientRect(),d=devicePixelRatio||1;if(c.width!==Math.round(r.width*d)||c.height!==Math.round(r.height*d)){c.width=Math.round(r.width*d);c.height=Math.round(r.height*d)}const ctx=c.getContext('2d');ctx.setTransform(d,0,0,d,0,0);return[ctx,r.width,r.height]}
+
+// ---------- UI ----------
+DATA.forEach((s,i)=>{const b=document.createElement('button');b.textContent=['BME','AMZ','GFR'][i]||('Frame '+(i+1));b.onclick=()=>{scene=i;load()};$('scenes').append(b)});
+$('legend').innerHTML=[0,4,2,1].map(k=>`<span><i style="background:${COLORS[k]}"></i>${LABEL[k]}</span>`).join('');
+
+function sizeCanvases(){const s=DATA[scene],w=$('image').getBoundingClientRect().width,hh=Math.round(Math.max(360,Math.min(600,w/(s.width/s.height)+24)));
+  if(innerWidth>900)['image','view'].forEach(id=>$(id).style.height=hh+'px');else['image','view'].forEach(id=>$(id).style.height='')}
+function load(){
+  const s=DATA[scene];sizeCanvases();world=buildWorld(s);view={...VIEW0};
+  [...$('scenes').children].forEach((b,i)=>b.classList.toggle('on',i===scene));
+  selected=(world.items.slice().sort((a,b)=>Math.hypot(a.base[0],a.base[2])-Math.hypot(b.base[0],b.base[2]))[0]||{c:s.cones[0]}).c.id;
+  Z={k:1,cx:s.width/2,cy:s.height/2};zoomTarget=null;
+  img=new Image();img.onload=draw2;img.src=s.image;
+  $('fname').textContent=s.name.replace(/\.rf\.[0-9a-f]+/,'');
+  $('imageinfo').textContent=`${s.width}×${s.height} · ${s.cones.length} detections`;
+  $('solvecount').textContent=`${world.items.length}/${s.cones.length} solved · cam ${world.camH.toFixed(2)} m · pitch ${world.tilt.toFixed(1)}°`;
+  $('calibration').textContent=`Camera: assumed horizontal FOV 80°, fx = fy = ${s.fx.toFixed(1)} px, principal point (${s.width/2}, ${s.height/2}), zero distortion. Fitted ground plane puts the camera ${world.camH.toFixed(2)} m above ground, pitched ${world.tilt.toFixed(1)}° relative to it.`;
+  $('cones').innerHTML='';
+  s.cones.forEach(c=>{const b=document.createElement('button');b.className='chip'+(c.pose?'':' off');b.dataset.id=c.id;
+    b.innerHTML=`<i style="background:${COLORS[c.cls]}"></i>#${c.id}`+(c.pose?` <small>${range(c.id).toFixed(1)} m</small>`:' <small>no solve</small>');
+    b.onclick=()=>select(c.id);$('cones').append(b)});
+  update();
+}
+function range(id){const it=world.items.find(i=>i.c.id===id);return it?Math.hypot(it.base[0],it.base[2]):NaN}
+function select(id,fromImage){selected=id;if(!fromImage&&Z.k>1.05)focusCone(id,Z.k);update()}
+function update(){
+  document.querySelectorAll('.chip').forEach(b=>b.classList.toggle('on',+b.dataset.id===selected));
+  const c=DATA[scene].cones.find(c=>c.id===selected),it=world.items.find(i=>i.c.id===selected);
+  if(c){
+    const head=`<div class="title"><i style="background:${COLORS[c.cls]}"></i>Cone #${c.id} · ${LABEL[c.cls]}<small>detection ${(100*c.confidence).toFixed(1)}%</small></div>`;
+    if(it){const[x,,z]=it.base,d=Math.hypot(x,z),brg=Math.atan2(x,z)*180/Math.PI;
+      $('details').innerHTML=head+`<div class="stats">
+        ${stat('Range',d.toFixed(2),'m')}${stat('Bearing',(brg>=0?'+':'')+brg.toFixed(1),'°')}
+        ${stat('Lateral X',x.toFixed(2),'m')}${stat('Forward Z',z.toFixed(2),'m')}
+        ${stat('Off-plane',(it.g[1]>=0?'+':'')+(it.g[1]*100).toFixed(0),'cm')}${stat('Reproj. RMS',c.pose.rms.toFixed(2),'px')}</div>`;
+    }else $('details').innerHTML=head+'<div class="reject">PnP rejected: too few confident keypoints, box too small, or reprojection fit too poor. The 2D detection is still shown.</div>';
+  }
+  draw2();draw3();
+}
+const stat=(k,v,u)=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}<small>${u}</small></div></div>`;
+
+// ---------- 2D view ----------
+let imgXf=null;
+function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.roundRect?ctx.roundRect(x,y,w,h,r):ctx.rect(x,y,w,h)}
+function draw2(){
+  const[ctx,w,h]=fit($('image'));ctx.clearRect(0,0,w,h);if(!img.complete||!img.naturalWidth)return;
+  const s=DATA[scene],pad=12,sc0=Math.min((w-2*pad)/s.width,(h-2*pad)/s.height);clampZ(w,h,sc0);
+  const sc=sc0*Z.k,dx=w/2-Z.cx*sc,dy=h/2-Z.cy*sc;imgXf={sc,sc0,dx,dy,w,h};
+  ctx.imageSmoothingQuality='high';ctx.drawImage(img,dx,dy,s.width*sc,s.height*sc);
+  $('zoomlvl').textContent=Z.k.toFixed(Z.k<10?1:0)+'×';$('zoomfit').disabled=Z.k<1.01;$('image').classList.toggle('zoomed',Z.k>1.01);
+  const kz=Math.min(2.2,Math.sqrt(Z.k)); // keypoints grow a little when zoomed in
+  const X=v=>dx+v*sc,Y=v=>dy+v*sc;
+  const order=s.cones.slice().sort((a,b)=>(a.id===selected)-(b.id===selected));
+  if(selected){ctx.fillStyle='rgba(4,6,10,.35)';ctx.fillRect(dx,dy,s.width*sc,s.height*sc)}
+  order.forEach(c=>{
+    const[x1,y1,x2,y2]=c.box,on=c.id===selected,col=COLORS[c.cls];
+    if(X(x2)<0||X(x1)>w||Y(y2)<0||Y(y1)>h)return; // off-screen while zoomed
+    ctx.globalAlpha=on?1:.75;
+    if(on){ctx.save();ctx.beginPath();ctx.rect(X(x1),Y(y1),(x2-x1)*sc,(y2-y1)*sc);ctx.clip();ctx.imageSmoothingQuality='high';ctx.drawImage(img,dx,dy,s.width*sc,s.height*sc);ctx.restore();ctx.shadowColor=col;ctx.shadowBlur=12}
+    ctx.strokeStyle=col;ctx.lineWidth=on?2:1.25;ctx.setLineDash(c.pose?[]:[4,3]);rr(ctx,X(x1),Y(y1),(x2-x1)*sc,(y2-y1)*sc,2);ctx.stroke();ctx.setLineDash([]);ctx.shadowBlur=0;
+    // label pill
+    ctx.font=`${on?600:500} 11px Inter,system-ui,sans-serif`;const t='#'+c.id,tw=ctx.measureText(t).width+8,ly=Math.max(dy,Y(y1)-16);
+    ctx.fillStyle=col;rr(ctx,X(x1),ly,tw,14,3);ctx.fill();ctx.fillStyle=c.cls===4||c.cls===3?'#111':'#fff';ctx.fillText(t,X(x1)+4,ly+10.5);
+    // keypoint skeleton
+    const k=c.kp,nk=c.cls===1?8:6,ok=i=>i<nk&&k[i]&&k[i][2]>=.5;
+    if(on){ctx.strokeStyle='rgba(255,255,255,.75)';ctx.lineWidth=1.2*kz;[[0,1],[2,3],[4,5],[6,7],[0,2],[2,4],[4,6],[1,3],[3,5],[5,7]].forEach(([a,b])=>{if(ok(a)&&ok(b)){ctx.beginPath();ctx.moveTo(X(k[a][0]),Y(k[a][1]));ctx.lineTo(X(k[b][0]),Y(k[b][1]));ctx.stroke()}})}
+    k.forEach((p,i)=>{if(!ok(i))return;const a=X(p[0]),b=Y(p[1]),r=(on?3.5:2)*kz;
+      ctx.beginPath();ctx.arc(a,b,r,0,7);ctx.fillStyle=on?'#fff':col;ctx.fill();if(on){ctx.lineWidth=1.5;ctx.strokeStyle=col;ctx.stroke()}
+      if(on&&$('numbers').checked){ctx.font='600 10px Inter,system-ui,sans-serif';ctx.fillStyle='#fff';ctx.strokeStyle='rgba(0,0,0,.8)';ctx.lineWidth=3;const tx=i%2?a+r+3:a-r-9;ctx.strokeText(i,tx,b+3.5);ctx.fillText(i,tx,b+3.5)}});
+    ctx.globalAlpha=1;
+  });
+}
+// zoom/pan state: k = zoom factor over "fit", (cx,cy) = image pixel at the canvas centre
+let Z={k:1,cx:0,cy:0},zoomTarget=null,pan=null;const MAXZ=24,I=$('image');
+function clampZ(w,h,sc0){const s=DATA[scene];Z.k=Math.max(1,Math.min(MAXZ,Z.k));const sc=sc0*Z.k;
+  ['cx','cy'].forEach((a,i)=>{const full=i?s.height:s.width,view=(i?h:w)/sc/2;Z[a]=full<=2*view?full/2:Math.max(view,Math.min(full-view,Z[a]))})}
+function toImg(e){const r=I.getBoundingClientRect();return[(e.clientX-r.left-imgXf.dx)/imgXf.sc,(e.clientY-r.top-imgXf.dy)/imgXf.sc,e.clientX-r.left,e.clientY-r.top]}
+function hitCone(x,y){const pad=6/imgXf.sc;return DATA[scene].cones.filter(c=>x>=c.box[0]-pad&&x<=c.box[2]+pad&&y>=c.box[1]-pad&&y<=c.box[3]+pad).sort((a,b)=>(a.box[2]-a.box[0])*(a.box[3]-a.box[1])-(b.box[2]-b.box[0])*(b.box[3]-b.box[1]))[0]}
+function animateTo(t){zoomTarget=t;const step=()=>{if(zoomTarget!==t)return;const f=.22;let done=true;
+  for(const a of['k','cx','cy']){const d=t[a]-Z[a];if(Math.abs(d)>(a==='k'?.002:.3))done=false;Z[a]+=d*f}
+  if(done){Object.assign(Z,t);zoomTarget=null}draw2();if(!done)requestAnimationFrame(step)};requestAnimationFrame(step)}
+function focusCone(id,k){const c=DATA[scene].cones.find(c=>c.id===id);if(!c||!imgXf)return;const[x1,y1,x2,y2]=c.box,bw=x2-x1,bh=y2-y1;
+  const fitK=Math.min(imgXf.w/(bw*3.2),imgXf.h/(bh*2.2))/imgXf.sc0;animateTo({k:Math.max(1,Math.min(MAXZ,k??fitK)),cx:(x1+x2)/2,cy:(y1+y2)/2})}
+function zoomAt(px,py,factor){const[ix,iy]=[(px-imgXf.dx)/imgXf.sc,(py-imgXf.dy)/imgXf.sc];zoomTarget=null;
+  const k=Math.max(1,Math.min(MAXZ,Z.k*factor)),sc=imgXf.sc0*k;Z.k=k;Z.cx=ix-(px-imgXf.w/2)/sc;Z.cy=iy-(py-imgXf.h/2)/sc;draw2()}
+I.onwheel=e=>{if(!imgXf)return;e.preventDefault();const r=I.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top,Math.exp(-e.deltaY*.0015))};
+I.onpointerdown=e=>{if(!imgXf)return;pan={x:e.clientX,y:e.clientY,moved:0};I.setPointerCapture(e.pointerId)};
+I.onpointermove=e=>{if(!pan)return;const dx=e.clientX-pan.x,dy=e.clientY-pan.y;pan.moved+=Math.abs(dx)+Math.abs(dy);pan.x=e.clientX;pan.y=e.clientY;
+  if(Z.k>1.01&&pan.moved>3){I.classList.add('dragging');zoomTarget=null;Z.cx-=dx/imgXf.sc;Z.cy-=dy/imgXf.sc;draw2()}};
+I.onpointerup=e=>{I.classList.remove('dragging');const p=pan;pan=null;if(!p||p.moved>3)return;const[x,y]=toImg(e),c=hitCone(x,y);if(c)select(c.id,true)};
+I.ondblclick=e=>{if(!imgXf)return;const[x,y,px,py]=toImg(e),c=hitCone(x,y);
+  if(c){selected=c.id;update();focusCone(c.id)}else if(Z.k>1.01)animateTo({k:1,cx:DATA[scene].width/2,cy:DATA[scene].height/2});else zoomAt(px,py,3)};
+$('zoomfit').onclick=()=>animateTo({k:1,cx:DATA[scene].width/2,cy:DATA[scene].height/2});
+$('zoomcone').onclick=()=>selected&&focusCone(selected);
+window.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;if(e.key==='z')$('zoomcone').click();if(e.key==='Escape'||e.key==='0')$('zoomfit').click()});
+
+// ---------- 3D view ----------
+let cam3=null;
+function camera(w,h){
+  const its=world.items,xs=its.map(i=>i.base[0]),zs=its.map(i=>i.base[2]);
+  const q=(a,f)=>{const b=a.slice().sort((x,y)=>x-y);return b.length?b[Math.min(b.length-1,Math.floor(f*(b.length-1)))]:0};
+  const maxZ=Math.max(6,...zs),minX=Math.min(-3,...xs),maxX=Math.max(3,...xs);
+  const fz=Math.max(6,q(zs,.8)),fx0=Math.min(-3,q(xs,.1)),fx1=Math.max(3,q(xs,.9));
+  const target=[(fx0+fx1)/4,0,fz*.45],span=Math.max(fz,fx1-fx0);
+  const d=span*.95*view.dist,cp=Math.cos(view.pitch);
+  const eye=add(target,[Math.sin(view.yaw)*cp*d,Math.sin(view.pitch)*d,-Math.cos(view.yaw)*cp*d]);
+  const fwd=norm(sub(target,eye)),right=norm(cross([0,1,0],fwd)),up=cross(fwd,right);
+  return{eye,fwd,right,up,f:Math.min(w,h)*1.25,w,h,span,maxZ,minX,maxX};
+}
+function toView(C,p){const v=sub(p,C.eye);return[dot(v,C.right),dot(v,C.up),dot(v,C.fwd)]}
+const NEAR=.15;
+function scr(C,v){return[C.w/2+v[0]*C.f/v[2],C.h/2-v[1]*C.f/v[2]]}
+function proj(C,p){const v=toView(C,p);return v[2]>NEAR?[...scr(C,v),v[2]]:null}
+function seg(ctx,C,a,b){let p=toView(C,a),q=toView(C,b);if(p[2]<NEAR&&q[2]<NEAR)return;
+  if(p[2]<NEAR){const t=(NEAR-p[2])/(q[2]-p[2]);p=add(p,mul(sub(q,p),t))}else if(q[2]<NEAR){const t=(NEAR-q[2])/(p[2]-q[2]);q=add(q,mul(sub(p,q),t))}
+  const A=scr(C,p),B=scr(C,q);ctx.beginPath();ctx.moveTo(A[0],A[1]);ctx.lineTo(B[0],B[1]);ctx.stroke()}
+function shade(hex,k){const n=parseInt(hex.slice(1),16);const f=v=>Math.max(0,Math.min(255,Math.round(v*k)));return`rgb(${f(n>>16)},${f(n>>8&255)},${f(n&255)})`}
+
+function coneFaces(it,C,sel){
+  // upright cone on ground: bands of [heightFrac0, heightFrac1, colourIndex]
+  const H=it.H*VIS,R=H/.325*.114,top=H*.08/.325,[bx,,bz]=it.base,N=22,paint=PAINT[it.c.cls];
+  const bands=it.c.cls===1?[[0,.277,0],[.277,.436,1],[.436,.594,0],[.594,.752,1],[.752,1,0]]:[[0,.46,0],[.46,.703,1],[.703,1,0]];
+  const L=norm([-.45,.8,-.4]),faces=[],ringAt=(fr,a)=>{const r=R*(1-fr)+top*.18*fr;return[bx+Math.cos(a)*r,H*fr*(1-.04)+.025,bz+Math.sin(a)*r]};
+  const slope=R/H;
+  bands.forEach(([f0,f1,ci])=>{for(let i=0;i<N;i++){const a0=i/N*2*Math.PI,a1=(i+1)/N*2*Math.PI,am=(a0+a1)/2;
+    const n=norm([Math.cos(am),slope,Math.sin(am)]);const lit=.42+.68*Math.max(0,dot(n,L));
+    faces.push({pts:[ringAt(f0,a0),ringAt(f0,a1),ringAt(f1,a1),ringAt(f1,a0)],fill:shade(paint[ci],lit),n,sel})}});
+  // square base plate
+  const s=R*1.05,y=.02,plate=[[bx-s,y,bz-s],[bx+s,y,bz-s],[bx+s,y,bz+s],[bx-s,y,bz+s]];
+  faces.push({pts:plate,fill:'#24272d',n:[0,1,0],plate:true,sel});
+  return faces;
+}
+function draw3(){
+  const[ctx,w,h]=fit($('view'));ctx.clearRect(0,0,w,h);const C=camera(w,h);cam3=C;
+  // ground grid
+  const x0=Math.floor(Math.min(C.minX-4,-6)),x1=Math.ceil(Math.max(C.maxX+4,6)),z1=Math.ceil(C.maxZ+5),z0=-3;
+  ctx.lineWidth=1;
+  for(let x=x0;x<=x1;x++){ctx.strokeStyle=x===0?'rgba(94,179,255,.28)':x%5?'rgba(140,160,190,.07)':'rgba(140,160,190,.16)';seg(ctx,C,[x,0,z0],[x,0,z1])}
+  for(let z=z0;z<=z1;z++){ctx.strokeStyle=z%5?'rgba(140,160,190,.07)':'rgba(140,160,190,.16)';seg(ctx,C,[x0,0,z],[x1,0,z])}
+  // range rings around camera
+  ctx.font='10px Inter,system-ui,sans-serif';
+  for(let r=5;r<=z1;r+=5){ctx.strokeStyle='rgba(94,179,255,.13)';ctx.setLineDash([3,4]);let prev=null;
+    for(let a=-80;a<=80;a+=4){const p=[Math.sin(a*Math.PI/180)*r,0,Math.cos(a*Math.PI/180)*r];if(prev)seg(ctx,C,prev,p);prev=p}
+    ctx.setLineDash([]);const lp=proj(C,[0,0,r]);if(lp){ctx.fillStyle='rgba(140,170,210,.5)';ctx.fillText(r+' m',lp[0]+4,lp[1]-3)}}
+  // camera FOV wedge on ground
+  const half=40*Math.PI/180,fl=Math.min(z1,C.maxZ+3);
+  const wedge=[[0,0,0],[Math.tan(half)*fl,0,fl],[-Math.tan(half)*fl,0,fl]].map(p=>proj(C,p));
+  if(wedge.every(Boolean)){ctx.fillStyle='rgba(94,179,255,.045)';ctx.beginPath();ctx.moveTo(wedge[0][0],wedge[0][1]);ctx.lineTo(wedge[1][0],wedge[1][1]);ctx.lineTo(wedge[2][0],wedge[2][1]);ctx.closePath();ctx.fill()}
+  ctx.strokeStyle='rgba(94,179,255,.25)';seg(ctx,C,[0,0,0],[Math.tan(half)*fl,0,fl]);seg(ctx,C,[0,0,0],[-Math.tan(half)*fl,0,fl]);
+  // selected link line + ground highlight
+  const selIt=world.items.find(i=>i.c.id===selected);
+  if(selIt){ctx.strokeStyle='rgba(255,255,255,.55)';ctx.setLineDash([5,4]);ctx.lineWidth=1.2;seg(ctx,C,[0,0,0],selIt.base);ctx.setLineDash([]);
+    ctx.strokeStyle=COLORS[selIt.c.cls];ctx.lineWidth=2;let prev=null;const rr0=selIt.H*VIS/.325*.26;for(let a=0;a<=360;a+=12){const p=[selIt.base[0]+Math.cos(a*Math.PI/180)*rr0,0,selIt.base[2]+Math.sin(a*Math.PI/180)*rr0];if(prev)seg(ctx,C,prev,p);prev=p}}
+  // camera glyph: mast + body
+  ctx.strokeStyle='rgba(232,237,244,.6)';ctx.lineWidth=1.5;seg(ctx,C,[0,0,0],world.cam);
+  const cb=[[-.25,world.camH-.08,-.15],[.25,world.camH-.08,-.15],[.25,world.camH+.08,-.15],[-.25,world.camH+.08,-.15]].map(p=>proj(C,p)),lens=proj(C,[0,world.camH,.2]),cp=proj(C,world.cam);
+  if(cb.every(Boolean)&&lens){ctx.fillStyle='#e8edf4';ctx.beginPath();cb.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fill();ctx.strokeStyle='#5eb3ff';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cp[0],cp[1]);ctx.lineTo(lens[0],lens[1]);ctx.stroke();
+    ctx.fillStyle='rgba(232,237,244,.75)';ctx.font='500 11px Inter,system-ui,sans-serif';ctx.fillText('camera',cb[1][0]+6,cb[1][1])}
+  // soft coloured ground glow under each cone
+  world.items.forEach(it=>{const r=it.H*VIS/.325*.2,pts=[];for(let k=0;k<24;k++){const t=k/24*2*Math.PI,q=proj(C,[it.base[0]+Math.cos(t)*r,0,it.base[2]+Math.sin(t)*r]);if(!q)return;pts.push(q)}
+    ctx.globalAlpha=it.c.id===selected?.35:.18;ctx.fillStyle=COLORS[it.c.cls];ctx.beginPath();pts.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]));ctx.closePath();ctx.fill();ctx.globalAlpha=1});
+  // cones: painter's algorithm over all faces, back faces culled
+  let faces=[];world.items.forEach(it=>faces.push(...coneFaces(it,C,it.c.id===selected)));
+  faces=faces.map(f=>{const v=f.pts.map(p=>toView(C,p));if(v.some(q=>q[2]<NEAR))return null;
+    const c=f.pts.reduce((a,p)=>add(a,p),[0,0,0]).map(x=>x/f.pts.length);if(!f.plate&&dot(f.n,sub(C.eye,c))<=0)return null;
+    return{...f,s:v.map(q=>scr(C,q)),z:v.reduce((a,q)=>a+q[2],0)/v.length+(f.plate?.5:0)}}).filter(Boolean).sort((a,b)=>b.z-a.z);
+  faces.forEach(f=>{ctx.beginPath();f.s.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fillStyle=f.fill;ctx.fill();ctx.strokeStyle=f.fill;ctx.lineWidth=.6;ctx.stroke()});
+  // labels
+  world.items.slice().sort((a,b)=>(a.c.id===selected)-(b.c.id===selected)).forEach(it=>{const p=proj(C,[it.base[0],it.H*VIS+.15,it.base[2]]);if(!p)return;const on=it.c.id===selected;
+    ctx.font=`${on?600:500} ${on?12:10.5}px Inter,system-ui,sans-serif`;const t='#'+it.c.id,tw=ctx.measureText(t).width;
+    if(on){ctx.fillStyle=COLORS[it.c.cls];rr(ctx,p[0]-tw/2-5,p[1]-15,tw+10,16,4);ctx.fill();ctx.fillStyle=it.c.cls===4||it.c.cls===3?'#111':'#fff';ctx.fillText(t,p[0]-tw/2,p[1]-3)}
+    else{ctx.fillStyle='rgba(232,237,244,.7)';ctx.fillText(t,p[0]-tw/2,p[1]-3)}});
+}
+// orbit: drag right spins the scene right, drag down tilts to look more from above (like most 3D tools)
+let drag=null,moved=0;const V=$('view');
+V.onpointerdown=e=>{drag=[e.clientX,e.clientY];moved=0;V.setPointerCapture(e.pointerId);V.classList.add('dragging')};
+V.onpointermove=e=>{if(!drag)return;const dx=e.clientX-drag[0],dy=e.clientY-drag[1];moved+=Math.abs(dx)+Math.abs(dy);
+  view.yaw-=dx*.007;view.pitch=Math.max(.06,Math.min(1.5,view.pitch+dy*.007));drag=[e.clientX,e.clientY];draw3()};
+V.onpointerup=e=>{V.classList.remove('dragging');drag=null;if(moved<4&&cam3){const r=V.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=null;
+  world.items.forEach(it=>{const a=proj(cam3,it.base),b=proj(cam3,[it.base[0],it.H*VIS,it.base[2]]);if(!a||!b)return;const d=Math.hypot(x-(a[0]+b[0])/2,y-(a[1]+b[1])/2);if(d<28&&(!best||d<best[0]))best=[d,it.c.id]});
+  if(best)select(best[1])}};
+V.onwheel=e=>{e.preventDefault();view.dist=Math.max(.15,Math.min(3,view.dist*Math.exp(e.deltaY*.001)));draw3()};
+$('reset').onclick=()=>{view={...VIEW0};draw3()};
+$('numbers').onchange=draw2;
+window.onresize=()=>{sizeCanvases();draw2();draw3()};
+load();
+</script>
+</body>
+</html>

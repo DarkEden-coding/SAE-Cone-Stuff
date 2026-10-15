@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Cone Pose</title>
+<script>
+// FastAPI serves this page at "/" and the other files under "/static/". When the directory is served directly
+// (e.g. `python3 -m http.server` inside static/) the files live next to the page, so fall back to "/".
+(function () {
+  var inStatic = location.protocol === 'file:' || location.pathname.indexOf('/static/') === 0;
+  var bases = inStatic ? [location.pathname.replace(/[^/]*$/, '')] : ['/static/', '/'];
+  function load(i) {
+    var base = bases[i];
+    var css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = base + 'style.css';
+    var js = document.createElement('script');
+    js.type = 'module'; js.src = base + 'app.js';
+    if (i + 1 < bases.length) js.onerror = function () { css.remove(); js.remove(); load(i + 1); };
+    document.head.append(css, js);
+  }
+  load(0);
+})();
+</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/jobs"><span class="logo"></span>Cone Pose</a>
+  <nav><a href="#/jobs">Jobs</a></nav>
+  <span class="spacer"></span>
+  <span id="health" class="health" title="server status"></span>
+</header>
+<main id="app"></main>
+<div id="toast" class="toast" hidden></div>
+</body>
+</html>

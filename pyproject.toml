@@ -1,0 +1,9 @@
+[project]
+name = "sae-object-detection"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "gradio>=6,<7",
+    "scipy>=1.15,<2",
+    "ultralytics>=8.4.163",
+]

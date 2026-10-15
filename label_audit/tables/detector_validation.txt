@@ -1,0 +1,8 @@
+ known_inward_shift_px    n  median_measured_px  recovered_shift_px  robust_sd_px  left_med  right_med
+                     0 5808              -0.214               0.000         0.887    -0.633      0.324
+                     2 5782               1.777               1.991         0.886     1.362      2.306
+                    -2 5836              -2.207              -1.993         0.885    -2.628     -1.674
+                     5 3693               4.572               4.786         0.944     4.294      5.107
+pair-averaged (L/R mean) detector error on exact GT: median -0.210 px, robust sd 0.492 px, n=1723
+abs error per keypoint: median 0.60 px, p90 1.50 px, p99 6.40 px
+gate pass: 46.2%; ungated robust sd 0.00 px

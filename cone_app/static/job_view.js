@@ -1,4 +1,4 @@
-import { getJob, getResult, mediaUrl, rerunJob, deleteJob, MOCK } from './api.js';
+import { getJob, getResult, mediaUrl, annotatedUrl, rerunJob, deleteJob, MOCK } from './api.js';
 import { el, toast, fmtNum, fmtTime, fmtAgo, classColor, STATUS_COLORS, download, landmarksCsv, optionsFields, readOptions } from './util.js';
 import { Overlay } from './overlay.js';
 import { Viewer } from './viewer3d.js';
@@ -108,7 +108,15 @@ function buildResultUI(box, job, result, { reload }) {
     ...[['boxes', 'Boxes'], ['keypoints', 'Keypoints'], ['labels', 'Labels'], ['ids', 'Landmark ids']].map(([k, label]) => {
       const c = el('input', { type: 'checkbox', checked: true, onchange: () => { overlay.opts[k] = c.checked; overlay.draw(); } });
       return el('label', { class: 'chk' }, c, label);
-    }));
+    }),
+    sizeInput('Keypoint size ×', 'kpSize'), sizeInput('Label size ×', 'labelSize'));
+  // overlay size multipliers (relative to box height); no upper limit, remembered per browser
+  function sizeInput(label, key) {
+    overlay[key] = Number(localStorage.getItem('coneapp.' + key)) || 1;
+    const inp = el('input', { type: 'number', min: '0.05', step: '0.25', value: String(overlay[key]), class: 'kp-size',
+      oninput: () => { const v = Number(inp.value); if (v > 0) { overlay[key] = v; localStorage.setItem('coneapp.' + key, String(v)); overlay.draw(); } } });
+    return el('label', { class: 'chk' }, label, inp);
+  }
   const mediaPane = el('section', { class: 'pane media-pane' }, el('div', { class: 'pane-title' }, 'Detections'), stage, toggles);
 
   // ---------- 3D ----------
@@ -166,7 +174,8 @@ function buildResultUI(box, job, result, { reload }) {
   ].filter((r) => r[1] != null);
   const exportBtns = el('div', { class: 'row wrap' },
     el('button', { class: 'btn small', onclick: () => download(`${job.id}-result.json`, JSON.stringify(result)) }, 'Export JSON'),
-    el('button', { class: 'btn small', onclick: () => download(`${job.id}-landmarks.csv`, landmarksCsv(result), 'text/csv') }, 'Export landmarks CSV'));
+    el('button', { class: 'btn small', onclick: () => download(`${job.id}-landmarks.csv`, landmarksCsv(result), 'text/csv') }, 'Export landmarks CSV'),
+    MOCK ? null : el('button', { class: 'btn small', onclick: (e) => downloadAnnotated(e.currentTarget) }, isVideo ? 'Download annotated video' : 'Download annotated image'));
   side.append(
     el('div', { class: 'card' }, el('h3', {}, 'Stats'), el('dl', { class: 'stats' }, statRows.map(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))])), exportBtns),
     el('div', { class: 'card' }, el('h3', {}, 'Detections in frame'), detBox),
@@ -195,6 +204,26 @@ function buildResultUI(box, job, result, { reload }) {
         return tr;
       })));
     detBox.replaceChildren(tbl);
+  }
+
+  // Server renders (and caches) the annotated media; the first request can take a while for long videos.
+  async function downloadAnnotated(btn) {
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Rendering…';
+    try {
+      const res = await fetch(annotatedUrl(job));
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      const blob = await res.blob();
+      const name = (/filename="?([^";]+)"?/.exec(res.headers.get('content-disposition') || '') || [])[1]
+        || `${job.id}-annotated${isVideo ? '.mp4' : '.jpg'}`;
+      const a = el('a', { href: URL.createObjectURL(blob), download: name });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    } catch (e) {
+      toast('Annotated download failed: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
   }
 
   function show(i, gap = false) {

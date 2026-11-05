@@ -73,6 +73,11 @@ export async function init() {
 }
 export const getHealth = () => health;
 
+export function annotatedUrl(job) {
+  const t = getToken();
+  return `/api/jobs/${encodeURIComponent(job.id)}/annotated` + (t ? '?token=' + encodeURIComponent(t) : '');
+}
+
 export function mediaUrl(job) {
   // mock mode has no media unless one is supplied for testing: ?mock=1&media=<url>
   if (MOCK) return new URLSearchParams(location.search).get('media');

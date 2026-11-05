@@ -8,6 +8,8 @@ export class Overlay {
     this.iw = imageSize[0]; this.ih = imageSize[1];
     this.frame = null; this.opts = { boxes: true, keypoints: true, labels: true, ids: true };
     this.sel = null; this.dim = false; this.kpConf = 0.5;
+    // keypoint radius = kpSize * box height; shrinks with distance, user-adjustable without a cap
+    this.kpSize = 1; this.labelSize = 1;
     this.ro = new ResizeObserver(() => this.draw());
     this.ro.observe(stage);
   }
@@ -50,7 +52,10 @@ export class Overlay {
       if (o.keypoints && d.keypoints) {
         const kp = d.keypoints;
         const n = d.class_id === 1 ? 8 : 6;
-        g.lineWidth = Math.max(1, lw - 0.5);
+        const bh = b ? (b[3] - b[1]) * s : 40;
+        const r = Math.max(0.3, 0.035 * bh * this.kpSize);
+        const klw = Math.min(Math.max(1, lw - 0.5), Math.max(0.3, r * 0.6));
+        g.lineWidth = klw;
         // ring pairs (left-right) and side chains
         g.strokeStyle = '#fff'; g.globalAlpha = 0.9;
         for (let i = 0; i + 1 < n; i += 2) seg(g, kp[i], kp[i + 1], X, Y);
@@ -61,27 +66,29 @@ export class Overlay {
           const k = kp[i];
           if (!k || k[2] <= 0) continue;
           const low = k[2] < this.kpConf;
-          g.beginPath(); g.arc(X(k[0]), Y(k[1]), 3, 0, 6.2832);
+          g.beginPath(); g.arc(X(k[0]), Y(k[1]), r, 0, 6.2832);
           g.fillStyle = low ? 'rgba(0,0,0,0.5)' : (i % 2 ? '#ff5fa2' : '#38e8ff');
-          g.fill(); g.lineWidth = 1; g.strokeStyle = low ? '#999' : '#000'; g.stroke();
+          g.fill(); g.lineWidth = Math.min(1, r * 0.3); g.strokeStyle = low ? '#999' : '#000'; g.stroke();
         }
       }
       if (o.labels && b) {
-        // shrink labels for small boxes so distant cones don't produce a wall of text
+        // font follows box height (so it shrinks with distance) times the user's label size
         const bh = (b[3] - b[1]) * s;
-        const range = d.range_m != null ? d.range_m.toFixed(1) + ' m' : null;
+        const fs = Math.max(4, bh * 0.22 * this.labelSize);
+        const range = d.range_m != null ? d.range_m.toFixed(1) + 'm' : null;
         const lid = o.ids && d.landmark_id != null ? '#' + d.landmark_id : null;
-        const parts = (bh < 22 && !selected ? [lid || range] : bh < 45 && !selected ? [range, lid]
-          : [d.class_name, d.conf != null ? d.conf.toFixed(2) : null, range, lid]).filter(Boolean);
+        const parts = (selected ? [d.class_name, d.conf != null ? d.conf.toFixed(2) : null, range, lid] : [range, lid]).filter(Boolean);
         if (!parts.length) continue;
-        const text = parts.join(' · ');
-        const w = g.measureText(text).width + 8;
-        let tx = X(b[0]), ty = Y(b[1]) - 17;
-        if (ty < 0) ty = Y(b[3]) + 2;
+        const text = parts.join(' ');
+        g.font = `600 ${fs.toFixed(1)}px system-ui, sans-serif`;
+        const pad = fs * 0.25, lh = fs * 1.25;
+        const w = g.measureText(text).width + pad * 2 + fs * 0.2;
+        let tx = X(b[0]), ty = Y(b[1]) - lh - 1;
+        if (ty < 0) ty = Y(b[3]) + 1;
         tx = Math.min(Math.max(0, tx), cw - w);
-        g.fillStyle = 'rgba(10,12,18,0.78)'; g.fillRect(tx, ty, w, 16);
-        g.fillStyle = col; g.fillRect(tx, ty, 3, 16);
-        g.fillStyle = '#fff'; g.fillText(text, tx + 6, ty + 2);
+        g.fillStyle = 'rgba(10,12,18,0.72)'; g.fillRect(tx, ty, w, lh);
+        g.fillStyle = col; g.fillRect(tx, ty, fs * 0.2, lh);
+        g.fillStyle = '#fff'; g.fillText(text, tx + fs * 0.2 + pad, ty + (lh - fs) / 2);
       }
     }
   }

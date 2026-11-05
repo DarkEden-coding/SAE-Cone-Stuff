@@ -75,15 +75,16 @@ export class Viewer {
     const firstValid = this.poses.findIndex(Boolean);
     if (firstValid > 0) for (let i = 0; i < firstValid; i++) this.lastValid[i] = firstValid;
 
-    // bounds
-    const bb = new THREE.Box3();
-    for (const l of result.landmarks || []) bb.expandByPoint(new THREE.Vector3(...l.p_world));
+    // bounds: the grid covers just the cones and the camera's start; the camera fit uses the whole path
+    const gb = new THREE.Box3();
+    for (const l of result.landmarks || []) gb.expandByPoint(new THREE.Vector3(...l.p_world));
+    if (firstValid >= 0) gb.expandByPoint(this.camPos[firstValid]);
+    if (gb.isEmpty()) gb.set(new THREE.Vector3(-2, -2, 0), new THREE.Vector3(2, 2, 0));
+    const bb = gb.clone();
     for (const p of this.camPos) if (p) bb.expandByPoint(p);
-    if (bb.isEmpty()) bb.set(new THREE.Vector3(-5, -5, 0), new THREE.Vector3(5, 5, 1));
-    bb.expandByPoint(new THREE.Vector3(0, 0, 0));
     this.bounds = bb;
 
-    this.buildGrid(bb);
+    this.buildGrid(gb);
     const axes = new THREE.AxesHelper(2); this.world.add(axes);
     this.buildLandmarks(result);
     this.buildTrajectory(frames);
@@ -94,9 +95,9 @@ export class Viewer {
   }
 
   buildGrid(bb) {
-    const pad = 10;
-    const x0 = Math.floor((bb.min.x - pad) / 5) * 5, x1 = Math.ceil((bb.max.x + pad) / 5) * 5;
-    const y0 = Math.floor((bb.min.y - pad) / 5) * 5, y1 = Math.ceil((bb.max.y + pad) / 5) * 5;
+    const pad = 1;
+    const x0 = Math.floor(bb.min.x - pad), x1 = Math.ceil(bb.max.x + pad);
+    const y0 = Math.floor(bb.min.y - pad), y1 = Math.ceil(bb.max.y + pad);
     const minor = [], major = [];
     const small = (x1 - x0) * (y1 - y0) < 150000;
     for (let x = x0; x <= x1; x++) { const a = x % 5 === 0 ? major : minor; if (a === minor && !small) continue; a.push(x, y0, 0, x, y1, 0); }

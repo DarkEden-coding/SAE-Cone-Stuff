@@ -51,3 +51,8 @@ cone_app/static/dev/mock_result_*.json
 xcuserdata/
 DerivedData/
 build/
+
+# Local cone detector (Apple Silicon CoreML app): weights, uploads and its own venv
+apps/local-detector/models/
+apps/local-detector/runs/
+apps/local-detector/.venv/

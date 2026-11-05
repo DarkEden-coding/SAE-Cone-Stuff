@@ -6,6 +6,7 @@ import hmac
 import json
 from pathlib import Path
 import tempfile
+import threading
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from . import __version__
+from .annotate import render as render_annotated
 from .config import Options, Settings
 from .intrinsics import ProfileStore, inspect_media, validate_capture
 from .jobs import JobBusy, JobStore
@@ -48,12 +50,16 @@ def create_app(settings: Settings | None = None, *, store: JobStore | None = Non
         if settings.token and path.startswith("/api/") and path != "/api/health":
             authorization = request.headers.get("authorization", "")
             supplied = authorization[7:] if authorization.startswith("Bearer ") else ""
-            if path.startswith("/api/jobs/") and path.rsplit("/", 1)[-1] in ("media", "result"):
+            if path.startswith("/api/jobs/") and path.rsplit("/", 1)[-1] in ("media", "result", "annotated"):
                 supplied = supplied or request.query_params.get("token", "")
             if not hmac.compare_digest(supplied.encode(), settings.token.encode()):
                 return JSONResponse({"detail": "Bearer token required"}, status_code=401,
                                     headers={"WWW-Authenticate": "Bearer"})
-        return await call_next(request)
+        response = await call_next(request)
+        if path == "/" or path.startswith("/static/"):
+            # Revalidate the UI on every load so frontend updates reach Safari without a hard refresh.
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.exception_handler(KeyError)
     async def not_found(request: Request, error: KeyError):
@@ -122,6 +128,27 @@ def create_app(settings: Settings | None = None, *, store: JobStore | None = Non
     @app.get("/api/jobs/{job_id}/media")
     def get_media(job_id: str):
         return FileResponse(app.state.jobs.media(job_id))
+
+    render_locks: dict[str, threading.Lock] = {}
+
+    def annotated_file(job_id: str) -> Path:
+        job = app.state.jobs.get(job_id)
+        directory = app.state.jobs.directory(job_id)
+        result_path = directory / "result.json"
+        if job["status"] != "done" or not result_path.is_file():
+            raise HTTPException(status_code=404, detail="Result is not ready")
+        out = directory / ("annotated.mp4" if job["kind"] == "video" else "annotated.jpg")
+        with render_locks.setdefault(job_id, threading.Lock()):
+            # Re-render after a rerun replaces result.json.
+            if not out.is_file() or out.stat().st_mtime < result_path.stat().st_mtime:
+                render_annotated(app.state.jobs.media(job_id), json.loads(result_path.read_text()), out)
+        return out
+
+    @app.get("/api/jobs/{job_id}/annotated")
+    async def get_annotated(job_id: str):
+        out = await run_in_threadpool(annotated_file, job_id)
+        name = app.state.jobs.get(job_id).get("name") or job_id
+        return FileResponse(out, filename=f"{Path(name).stem}-annotated{out.suffix}")
 
     @app.get("/api/jobs/{job_id}/result")
     def get_result(job_id: str):

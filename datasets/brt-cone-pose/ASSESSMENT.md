@@ -36,7 +36,7 @@ class names/order differ, and the keypoint branch is new.
 The following command passed on this machine's RTX 5060 (8 GB):
 
 ```sh
-uv run --locked train_brt_pose.py --from-detector --smoke
+uv run --locked training/train_brt_pose.py --from-detector --smoke
 ```
 
 It trained for one epoch on 16 images, validated on four, saved and reloaded a
@@ -51,14 +51,14 @@ was zero. The smoke checkpoint must not be deployed as a trained replacement.
 Reuse the existing cone detector's features:
 
 ```sh
-uv run --locked train_brt_pose.py --from-detector --epochs 100 --batch 4
+uv run --locked training/train_brt_pose.py --from-detector --epochs 100 --batch 4
 ```
 
 Start a smaller model using pretrained YOLO26n pose weights (downloads weights
 on first use):
 
 ```sh
-uv run --locked train_brt_pose.py --epochs 100 --batch 4
+uv run --locked training/train_brt_pose.py --epochs 100 --batch 4
 ```
 
 Both use 640 pixels by default; evaluate 800 or 960 for distant cones, with a

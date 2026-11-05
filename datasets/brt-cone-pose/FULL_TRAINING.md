@@ -17,7 +17,7 @@ Benchmark checkpoints are compatibility checks, not usable cone pose models.
 
 ## Offline augmentation
 
-`augment_brt_pose.py` builds a training manifest of 30,000 images: all 9,218
+`training/augment_brt_pose.py` builds a training manifest of 30,000 images: all 9,218
 original training images and 20,782 deterministic variants. Each source gets
 two or three variants. Training sources are uniformly balanced across variants.
 Variants retain up to 1600 pixels on the long edge to preserve small cones.
@@ -39,7 +39,7 @@ and numeric label constraints before training and writes `augmentation-audit.jso
 
 ## Progress and continuation
 
-`run_brt_training_flow.py` runs under the systemd user service
+`training/run_brt_training_flow.py` runs under the systemd user service
 `brt-cone-pose-training.service` and waits for augmentation completion before
 starting full training and evaluation. A sleep inhibitor keeps the machine awake
 during GPU training and evaluation. Progress is recorded in:
@@ -56,7 +56,7 @@ verification and report delivery on October 11, 2026.
 If interrupted after checkpoints exist, resume using:
 
 ```sh
-uv run --locked train_brt_full.py --resume runs/brt-pose-m-960-30k/weights/last.pt --batch 4 --epochs 20 --workers 6
+uv run --locked training/train_brt_full.py --resume runs/brt-pose-m-960-30k/weights/last.pt --batch 4 --epochs 20 --workers 6
 ```
 
 ## Final evaluation and outputs
@@ -73,7 +73,7 @@ on the comparatively permissive default pose metric for custom keypoint layouts.
 After the final model is verified, infer boxes and keypoints with:
 
 ```sh
-uv run --locked cone_pose_predict.py path/to/image-or-video --output pose-predictions
+uv run --locked training/cone_pose_predict.py path/to/image-or-video --output pose-predictions
 ```
 
 This writes annotated images/frames and `predictions.jsonl`, containing original
@@ -140,10 +140,10 @@ Additional training requires a new user instruction under the current epoch cap.
 
 Reports: `runs/brt-pose-m-960-30k/{validation-pose-accuracy.json,pose-accuracy.json,test-metrics.json}`.
 Annotated examples: `runs/brt-pose-m-960-30k/{val-examples,test-examples}`.
-Inference was smoke-tested on a validation image using `cone_pose_predict.py`.
+Inference was smoke-tested on a validation image using `training/cone_pose_predict.py`.
 
 ```sh
-uv run --locked cone_pose_predict.py path/to/image-or-video --output pose-predictions
+uv run --locked training/cone_pose_predict.py path/to/image-or-video --output pose-predictions
 ```
 
 The default checkpoint is the final best pose model. Output is per-image/frame

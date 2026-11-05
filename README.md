@@ -15,16 +15,18 @@ cone app serves.
 
 | Path | What it is |
 |---|---|
-| `cone_app/` | Cone pose web app: FastAPI backend, keypoint → PnP → cone-only SLAM pipeline, Three.js 3D viewer |
-| `cone_app/ios/ConeCapture/` | iPhone app that records photo/video with per-frame ARKit intrinsics and uploads to `cone_app` |
-| `web_view.py` | Older Gradio app for box-only cone detection (blue/yellow) on images and videos |
-| `cone_pose_predict.py` | Command line: run the pose model on images/videos, export overlays and JSONL keypoints |
-| `train_*.py`, `run_*.py`, `augment_*.py`, `clean_brt_pose.py`, `adjust_brt_labels.py` | BRT cone pose dataset preparation and training |
-| `evaluate_brt_pose.py`, `compare_brt_pose_sizes.py`, `audit_recall.py`, `benchmark_brt_speed.py` | Evaluation and benchmarking |
+| `cone_app/` | Processing server: FastAPI backend, keypoint → PnP → cone-only SLAM pipeline, Three.js 3D viewer |
+| `ios/ConeCapture/` | iPhone capture app: records photo/video with per-frame ARKit intrinsics and uploads to `cone_app` |
+| `apps/gradio-viewer/` | Older Gradio app for box-only cone detection (blue/yellow) on images and videos (`web_view.py`) |
+| `apps/local-detector/` | Standalone Apple Silicon detector web app (YOLO26m CoreML, Basler camera input). Has its own `pyproject.toml` and venv; run `uv run server.py` from that folder. Weights in `models/` are not in git |
+| `training/` | BRT cone pose dataset preparation (`clean_`, `adjust_`, `augment_`), training (`train_*`, `run_*`), evaluation and benchmarking, and `cone_pose_predict.py` |
 | `synth/` | Blender synthetic cone test set, PnP evaluation, keypoint bias correction, reports ([synth/README.md](synth/README.md)) |
 | `label_audit/` | Audit of BRT keypoint label quality and model bias ([label_audit/REPORT.md](label_audit/REPORT.md)) |
 | `demos/` | Standalone HTML cone PnP demo |
 | `datasets/brt-cone-pose/*.md` | Dataset assessment, full training flow, model size comparison |
+
+All commands run from the repo root unless noted. `datasets/`, `runs/`, `synth_data/` and `synth_train/` stay
+at the root because the training, `synth/` and `label_audit/` scripts resolve them from there.
 
 ## Cone pose web app (`cone_app/`)
 
@@ -90,8 +92,8 @@ To develop the frontend without the backend, run `node cone_app/static/dev/gen_m
 
 ### iPhone app
 
-See [cone_app/ios/ConeCapture/README.md](cone_app/ios/ConeCapture/README.md). In short:
-`brew install xcodegen && cd cone_app/ios/ConeCapture && xcodegen && open ConeCapture.xcodeproj`. Set the
+See [ios/ConeCapture/README.md](ios/ConeCapture/README.md). In short:
+`brew install xcodegen && cd ios/ConeCapture && xcodegen && open ConeCapture.xcodeproj`. Set the
 signing team, run it on the phone, and enter the server URL in Settings.
 
 ### Accuracy and limitations
@@ -102,11 +104,11 @@ signing team, run it on the phone, and enter the server URL in Settings.
   0.15 m and the cone error about 0.12 m. There is **no loop closure**, so revisited cones can appear twice.
 - ARKit images are treated as pinhole (no distortion model).
 
-## Older detector web view (`web_view.py`)
+## Older detector web view (`apps/gradio-viewer/web_view.py`)
 
 ```sh
-uv run --locked web_view.py --port 7860   # loopback; published with tailscale serve on :8443
-uv run test_web_view.py                   # image/video check against the running app
+uv run --locked apps/gradio-viewer/web_view.py --port 7860   # loopback; published with tailscale serve on :8443
+uv run apps/gradio-viewer/test_web_view.py                   # image/video check against the running app
 ```
 
 It does box detection only, using `runs/yolo26m-640-small-cones/weights/best.pt` (not in git; pass
@@ -126,7 +128,7 @@ points 6–7 are used only for big orange cones.
   It has the best far-cone PnP and is the cone app's default.
 
 ```sh
-uv run --locked cone_pose_predict.py path/to/image-or-video --output pose-predictions
+uv run --locked training/cone_pose_predict.py path/to/image-or-video --output pose-predictions
 ```
 
 This writes overlays and `predictions.jsonl` with original-pixel boxes and eight keypoints with confidences.

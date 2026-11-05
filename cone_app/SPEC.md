@@ -39,7 +39,7 @@ keep all data under the repo (/mnt/Primary).
 Existing code to reuse (read it, import from `synth/` or copy minimal pieces): `synth/cone_model.py`
 (cone dimensions, `canonical_rings`, CLASS_NAMES), `synth/eval_pnp.py` (`planar_model`, `solve_pnp`),
 `synth/kp_correction.py` (box-height keypoint bias correction + range scale; tables in
-`synth_data/eval/kp_correction_hires.json` for model D — refit for model E), `web_view.py` (existing
+`synth_data/eval/kp_correction_hires.json` for model D — refit for model E), `apps/gradio-viewer/web_view.py` (existing
 Gradio app: loopback-only serving pattern).
 
 Model: `runs/by-n-E-far/weights/best.pt`, default imgsz 1920. Classes: 0 BLUE, 1 ORANGE_BIG, 2 ORANGE,
@@ -77,9 +77,15 @@ big orange (1) uses 4 rings → 0–7. Keypoint 3D model: ring at height z with 
 }
 ```
 
-- Media pixels are stored **as captured by ARKit (sensor-native landscape, no rotation)**; `K` is in the
-  pixel coordinates of the stored media (`image_size` = media width/height). If the app ever scales
-  images it must scale K identically.
+- Media pixels are rotated in **90-degree steps to the nearest gravity-upright orientation at capture
+  start** (CoreMotion gravity, independent of UI orientation/rotation lock). Video holds that rotation
+  for the whole clip; photos use gravity at shutter press. When pointing nearly straight up/down,
+  preserve the last reliable orientation (portrait before the first useful gravity reading).
+- Rotation is baked into JPEG / H.264 pixels, with no display transform required. `K` and `image_size`
+  describe those stored pixels. Scale K to the native buffer size before rotating. For a clockwise
+  90-degree turn of a `W × H` buffer, swap `fx/fy`, set `cx' = H - 1 - cy`, `cy' = cx`, and swap dimensions.
+  For 180 degrees use `cx' = W - 1 - cx`, `cy' = H - 1 - cy`; for 270 degrees swap `fx/fy` and use
+  `cx' = cy`, `cy' = W - 1 - cx`. No gravity vectors or ARKit pose data are uploaded.
 - ARKit `camera.intrinsics` is a column-major `simd_float3x3`: fx = m[0][0], fy = m[1][1],
   cx = m[2][0], cy = m[2][1]. Convert to the row-major K above.
 - `frames`: photo → exactly one entry; video → one per encoded video frame in order, `index` = encoded

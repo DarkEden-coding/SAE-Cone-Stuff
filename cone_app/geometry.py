@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 from collections.abc import Sequence
 
@@ -18,14 +19,23 @@ from synth.cone_model import CLASS_NAMES as _CLASS_NAMES, canonical_rings, cone_
 
 CLASS_NAMES: dict[int, str] = dict(_CLASS_NAMES)
 
+# Real small cones are scaled uniformly from the 325 mm FS spec cone (keypoint heights and radii
+# included). Default: 14 in (355.6 mm) cones as recorded; override with CONE_APP_SMALL_CONE_HEIGHT_M.
+SMALL_CONE_HEIGHT_M = float(os.environ.get("CONE_APP_SMALL_CONE_HEIGHT_M", 0.3556))
+
+
+def cone_scale(class_id: int) -> float:
+    return 1.0 if class_id == 1 else SMALL_CONE_HEIGHT_M / cone_spec(class_id)["height"]
+
 
 def cone_dims(class_id: int) -> dict[str, float]:
-    spec = cone_spec(class_id)
-    return {"height": spec["height"], "base": spec["plate_size"]}
+    spec, k = cone_spec(class_id), cone_scale(class_id)
+    return {"height": spec["height"] * k, "base": spec["plate_size"] * k}
 
 
 def ring_model(class_id: int) -> list[tuple[float, float]]:
-    return canonical_rings(class_id)
+    k = cone_scale(class_id)
+    return [(z * k, r * k) for z, r in canonical_rings(class_id)]
 
 
 def n_keypoints(class_id: int) -> int:

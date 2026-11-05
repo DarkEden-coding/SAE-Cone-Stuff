@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cone Detector</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #161a1f; --panel2: #1d2228; --border: #2a3038;
+    --text: #e6e9ee; --muted: #8b95a3; --accent: #4f8cff;
+    --blue: #2f7bff; --yellow: #ffc400; --err: #ff5a5f; --ok: #3ccf8e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .model { color: var(--muted); font-size: 12px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; }
+  .conf { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); }
+  .conf input { width: 180px; accent-color: var(--accent); }
+  .conf b { color: var(--text); font-variant-numeric: tabular-nums; min-width: 34px; display: inline-block; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 24px 60px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+  .tabs button { background: none; border: 0; color: var(--muted); padding: 10px 16px; cursor: pointer;
+    font: inherit; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab { display: none; } .tab.active { display: block; }
+  .drop { display: block; margin-bottom: 16px; border: 1.5px dashed var(--border); border-radius: 10px; padding: 36px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: .15s; background: var(--panel); }
+  .drop.over, .drop:hover { border-color: var(--accent); color: var(--text); }
+  .drop input { display: none; }
+  .grid { display: grid; grid-template-columns: 1fr 260px; gap: 16px; margin-top: 16px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .media img, .media video { display: block; max-width: 100%; border-radius: 6px; margin: 0 auto; }
+  .stats { display: flex; flex-direction: column; gap: 10px; }
+  .stat { display: flex; justify-content: space-between; color: var(--muted); }
+  .stat b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot.blue_cone { background: var(--blue); } .dot.yellow_cone { background: var(--yellow); }
+  ul.dets { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; border-top: 1px solid var(--border); }
+  ul.dets li { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--panel2); }
+  .hidden { display: none !important; }
+  .progress { height: 8px; background: var(--panel2); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 12px; font: inherit; }
+  select { min-width: 260px; }
+  .btn { cursor: pointer; text-decoration: none; display: inline-block; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .stage { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 16/9; }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .stage .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+  #toasts { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+  .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--err);
+    padding: 10px 14px; border-radius: 6px; max-width: 380px; box-shadow: 0 6px 20px #0008; }
+  .toast.info { border-left-color: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cone Detector</h1>
+  <span class="model" id="model">loading…</span>
+  <label class="conf">Confidence <input type="range" id="conf" min="0.05" max="0.95" step="0.05" value="0.25"> <b id="confVal">0.25</b></label>
+</header>
+<main>
+  <nav class="tabs">
+    <button data-tab="image" class="active">Image</button>
+    <button data-tab="video">Video</button>
+    <button data-tab="camera">Camera</button>
+  </nav>
+
+  <section class="tab active" id="tab-image">
+    <label class="drop" id="imgDrop">Drop an image here or click to choose<input type="file" id="imgFile" accept="image/*"></label>
+    <div class="grid hidden" id="imgResult">
+      <div class="card media"><img id="imgOut" alt="Annotated result"></div>
+      <div class="card stats">
+        <div class="stat">Inference <b id="imgMs">-</b></div>
+        <div class="stat"><span><i class="dot blue_cone"></i>blue_cone</span><b id="imgBlue">0</b></div>
+        <div class="stat"><span><i class="dot yellow_cone"></i>yellow_cone</span><b id="imgYellow">0</b></div>
+        <ul class="dets" id="imgDets"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-video">
+    <label class="drop" id="vidDrop">Drop a video here or click to choose<input type="file" id="vidFile" accept="video/*"></label>
+    <div class="card hidden" id="vidProg" style="margin-top:16px">
+      <div class="row"><span id="vidStatus">Uploading…</span><span class="muted" style="margin-left:auto" id="vidFrames"></span></div>
+      <div class="progress"><div id="vidBar"></div></div>
+      <div class="row muted">
+        <span><i class="dot blue_cone"></i>blue_cone <b id="vidBlue">0</b></span>
+        <span><i class="dot yellow_cone"></i>yellow_cone <b id="vidYellow">0</b></span>
+      </div>
+    </div>
+    <div class="card media hidden" id="vidResult" style="margin-top:16px">
+      <video id="vidOut" controls playsinline></video>
+      <div class="row" style="margin-top:12px"><a class="btn" id="vidDl" download="detections.mp4">Download result</a></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-camera">
+    <div class="row">
+      <select id="camSel"><option value="">No cameras found</option></select>
+      <button class="btn" id="camRefresh" title="Refresh camera list">&#x21bb;</button>
+      <button class="btn primary" id="camStart">Start</button>
+      <button class="btn" id="camStop" disabled>Stop</button>
+    </div>
+    <div class="grid">
+      <div class="stage">
+        <div class="placeholder" id="camPh">Camera is off</div>
+        <video id="camVid" muted playsinline autoplay></video>
+        <canvas id="camOverlay"></canvas>
+      </div>
+      <div class="card stats">
+        <div class="stat">FPS <b id="camFps">-</b></div>
+        <div class="stat">Inference <b id="camMs">-</b></div>
+        <div class="stat">Latency <b id="camLat">-</b></div>
+        <div class="stat"><span><i class="dot blue_cone"></i>blue_cone</span><b id="camBlue">0</b></div>
+        <div class="stat"><span><i class="dot yellow_cone"></i>yellow_cone</span><b id="camYellow">0</b></div>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="toasts"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COLORS = { blue_cone: '#2f7bff', yellow_cone: '#ffc400' };
+
+function toast(msg, kind = 'error') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'error' ? 6000 : 3000);
+}
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  let body = null;
+  try { body = await res.json(); } catch (_) {}
+  if (!res.ok) throw new Error((body && (body.detail || body.error)) || `${res.status} ${res.statusText}`);
+  return body;
+}
+
+function countByClass(dets) {
+  const c = { blue_cone: 0, yellow_cone: 0 };
+  for (const d of dets) c[d.name] = (c[d.name] || 0) + 1;
+  return c;
+}
+
+// ---------- header / conf ----------
+const confEl = $('conf');
+const getConf = () => parseFloat(confEl.value);
+confEl.addEventListener('input', () => { $('confVal').textContent = getConf().toFixed(2); });
+confEl.addEventListener('change', () => {
+  if (lastImage) runImage(lastImage);
+  if (cam.running) cam.setConf();
+});
+
+api('/api/info')
+  .then((info) => { $('model').textContent = info.model || 'unknown model'; })
+  .catch((e) => { $('model').textContent = 'server unreachable'; toast('Failed to load model info: ' + e.message); });
+
+// ---------- tabs ----------
+document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab));
+  if (b.dataset.tab === 'camera') cam.initDevices();
+}));
+
+function setupDrop(zone, input, accept, onFile) {
+  input.addEventListener('change', () => { if (input.files[0]) onFile(input.files[0]); input.value = ''; });
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault(); zone.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (!f) return;
+    if (!f.type.startsWith(accept)) return toast(`Please drop a ${accept.slice(0, -1)} file`);
+    onFile(f);
+  });
+}
+
+// ---------- image ----------
+let lastImage = null, imgSeq = 0;
+async function runImage(file) {
+  lastImage = file;
+  const seq = ++imgSeq;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('conf', getConf());
+  $('imgMs').textContent = '…';
+  try {
+    const r = await api('/api/image', { method: 'POST', body: fd });
+    if (seq !== imgSeq) return; // a newer request superseded this one
+    $('imgResult').classList.remove('hidden');
+    $('imgOut').src = r.image;
+    $('imgMs').textContent = r.ms.toFixed(1) + ' ms';
+    const c = countByClass(r.detections);
+    $('imgBlue').textContent = c.blue_cone;
+    $('imgYellow').textContent = c.yellow_cone;
+    const ul = $('imgDets');
+    ul.innerHTML = '';
+    if (!r.detections.length) ul.innerHTML = '<li class="muted">No detections</li>';
+    for (const d of [...r.detections].sort((a, b) => b.conf - a.conf)) {
+      const li = document.createElement('li');
+      li.innerHTML = `<span><i class="dot ${d.name}"></i>${d.name}</span><b>${Math.round(d.conf * 100)}%</b>`;
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    if (seq === imgSeq) { $('imgMs').textContent = '-'; toast('Image inference failed: ' + e.message); }
+  }
+}
+setupDrop($('imgDrop'), $('imgFile'), 'image/', runImage);
+
+// ---------- video ----------
+let vidJob = 0;
+async function runVideo(file) {
+  const job = ++vidJob;
+  $('vidResult').classList.add('hidden');
+  $('vidProg').classList.remove('hidden');
+  $('vidStatus').textContent = 'Uploading ' + file.name + '…';
+  $('vidFrames').textContent = '';
+  $('vidBar').style.width = '0';
+  $('vidBlue').textContent = $('vidYellow').textContent = '0';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('conf', getConf());
+  try {
+    const { job_id } = await api('/api/video', { method: 'POST', body: fd });
+    $('vidStatus').textContent = 'Processing…';
+    while (job === vidJob) {
+      const s = await api('/api/video/' + encodeURIComponent(job_id));
+      if (job !== vidJob) return;
+      $('vidBar').style.width = Math.round((s.progress || 0) * 100) + '%';
+      $('vidFrames').textContent = `frames ${s.frames || 0} / ${s.total || '?'}`;
+      $('vidBlue').textContent = (s.counts && s.counts.blue_cone) || 0;
+      $('vidYellow').textContent = (s.counts && s.counts.yellow_cone) || 0;
+      if (s.status === 'error') throw new Error(s.error || 'processing failed');
+      if (s.status === 'done') {
+        const url = `/api/video/${encodeURIComponent(job_id)}/result`;
+        $('vidStatus').textContent = 'Done';
+        $('vidBar').style.width = '100%';
+        $('vidOut').src = url;
+        $('vidDl').href = url;
+        $('vidDl').download = file.name.replace(/\.[^.]+$/, '') + '_detections.mp4';
+        $('vidResult').classList.remove('hidden');
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch (e) {
+    if (job !== vidJob) return;
+    $('vidStatus').textContent = 'Error: ' + e.message;
+    toast('Video processing failed: ' + e.message);
+  }
+}
+setupDrop($('vidDrop'), $('vidFile'), 'video/', runVideo);
+
+// ---------- camera ----------
+const cam = {
+  running: false, stream: null, ws: null, inited: false,
+  off: document.createElement('canvas'),
+  frames: 0, fpsT: 0,
+  // Frames sent but not yet answered, in send order. Replies arrive in the same order,
+  // so each reply is drawn together with the exact frame it was computed on.
+  pending: [], pool: [], maxInFlight: 2, fresh: true, lastCap: 0, retry: 0, sendChain: Promise.resolve(),
+
+  async listDevices() {
+    const sel = $('camSel'), prev = sel.value;
+    const [devs, pylon] = await Promise.all([
+      navigator.mediaDevices
+        ? navigator.mediaDevices.enumerateDevices().then((ds) => ds.filter((d) => d.kind === 'videoinput')).catch(() => [])
+        : [],
+      // Basler GigE/USB3 Vision cameras aren't visible to the browser; the server streams them via pylon.
+      api('/api/pylon').then((r) => r.cameras).catch(() => []),
+    ]);
+    sel.innerHTML = '';
+    if (!devs.length && !pylon.length) sel.innerHTML = '<option value="">No cameras found</option>';
+    const group = (label, opts) => {
+      const g = document.createElement('optgroup');
+      g.label = label; g.append(...opts); sel.append(g);
+    };
+    if (devs.length) group('Browser cameras', devs.map((d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId)));
+    if (pylon.length) group('Basler / pylon (via server)', pylon.map((c) => new Option(c.label, 'pylon:' + c.id)));
+    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  },
+
+  async initDevices() {
+    if (this.inited) return;
+    this.inited = true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast('Browser camera API unavailable (requires https or localhost)');
+      return this.listDevices().catch(() => {});
+    }
+    navigator.mediaDevices.addEventListener('devicechange', () => this.listDevices().catch(() => {}));
+    try {
+      // Request permission once so device labels are populated.
+      const s = await navigator.mediaDevices.getUserMedia({ video: true });
+      s.getTracks().forEach((t) => t.stop());
+    } catch (e) {
+      toast('Camera permission: ' + (e.name === 'NotAllowedError' ? 'access denied' : e.message));
+    }
+    try { await this.listDevices(); } catch (e) { toast('Could not list cameras: ' + e.message); }
+  },
+
+  async start() {
+    await this.initDevices();
+    this.stop(true);
+    const id = $('camSel').value;
+    if (id.startsWith('pylon:')) return this.startPylon(id.slice(6));
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        video: id ? { deviceId: { exact: id }, width: { ideal: 1280 }, height: { ideal: 720 } } : true,
+        audio: false,
+      });
+    } catch (e) {
+      toast('Could not open camera: ' + (e.name === 'NotAllowedError' ? 'permission denied' : e.message));
+      return this.stop();
+    }
+    const v = $('camVid');
+    v.srcObject = this.stream;
+    await v.play().catch(() => {});
+    if (!v.videoWidth) await new Promise((r) => v.addEventListener('loadedmetadata', r, { once: true }));
+    this.running = true;
+    // Only send new camera frames, never the same frame twice.
+    if (v.requestVideoFrameCallback) {
+      // The <video> stays visible under the canvas: Chromium skips these callbacks for hidden video.
+      const onFrame = () => { if (!this.running) return; this.fresh = true; this.pump(); v.requestVideoFrameCallback(onFrame); };
+      v.requestVideoFrameCallback(onFrame);
+    }
+    $('camPh').classList.add('hidden');
+    $('camStart').disabled = true; $('camStop').disabled = false;
+    this.listDevices().catch(() => {});
+    this.connect();
+  },
+
+  // Server-side camera: the server grabs, infers and sends each frame's detections (JSON) followed by
+  // the frame itself (JPEG), so the image and boxes always belong together. Each frame is acked once drawn.
+  startPylon(serial) {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws/pylon/${encodeURIComponent(serial)}?conf=${getConf()}`);
+    this.ws = ws; this.pylon = true; this.running = true;
+    this.frames = 0; this.fpsT = performance.now();
+    $('camStart').disabled = true; $('camStop').disabled = false;
+    $('camPh').textContent = 'Opening camera…';  // opening a GigE camera can take a few seconds
+    let meta = null, chain = Promise.resolve();
+    ws.onmessage = (ev) => {
+      if (ws !== this.ws) return;
+      if (typeof ev.data === 'string') {
+        const r = JSON.parse(ev.data);
+        if (r.error) { toast(r.error); this.stop(); } else meta = r;
+        return;
+      }
+      const m = meta, received = performance.now();
+      chain = chain.then(() => createImageBitmap(ev.data)).then((bmp) => {
+        if (ws === this.ws && this.running) {
+          $('camPh').classList.add('hidden');
+          this.render(m, { canvas: bmp, t0: received - m.server_ms });
+        }
+        bmp.close();
+        if (ws.readyState === WebSocket.OPEN) ws.send('{"ack":1}');
+      }).catch((e) => toast('Frame decode failed: ' + e.message));
+    };
+    ws.onerror = () => { if (ws === this.ws) toast('WebSocket error'); };
+    ws.onclose = () => { if (ws === this.ws && this.running) { toast('Camera stream closed'); this.stop(); } };
+  },
+
+  setConf() {
+    if (this.pylon) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ conf: getConf() }));
+    } else this.reconnect();
+  },
+
+  connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws/stream?conf=${getConf()}`);
+    this.ws = ws;
+    this.frames = 0; this.fpsT = performance.now();
+    this.clearPending();
+    ws.onopen = () => this.pump();
+    ws.onmessage = (ev) => {
+      if (ws !== this.ws || !this.running) return;
+      let r;
+      try { r = JSON.parse(ev.data); } catch (_) { return; }
+      const frame = this.pending.shift();
+      if (r.error) toast('Server error: ' + r.error);
+      else if (frame) this.render(r, frame);
+      if (frame) this.pool.push(frame.canvas);
+      this.pump();
+    };
+    ws.onerror = () => { if (ws === this.ws) toast('WebSocket error'); };
+    ws.onclose = (ev) => {
+      if (ws === this.ws && this.running) {
+        toast('Stream connection closed' + (ev.reason ? ': ' + ev.reason : ''));
+        this.stop();
+      }
+    };
+  },
+
+  reconnect() {
+    const old = this.ws;
+    this.ws = null;
+    if (old) old.close();
+    this.connect();
+  },
+
+  clearPending() {
+    this.pending.forEach((f) => this.pool.push(f.canvas));
+    this.pending = [];
+  },
+
+  pump() {
+    const v = $('camVid'), ws = this.ws;
+    if (!this.running || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth) return;
+    if (this.pending.length >= this.maxInFlight) return;
+    // Wait for a new camera frame; fall back after 100 ms in case frame callbacks stall (e.g. background tab).
+    if (!this.fresh && performance.now() - this.lastCap < 100) {
+      if (!this.retry) this.retry = setTimeout(() => { this.retry = 0; this.pump(); }, 100);
+      return;
+    }
+    if (v.requestVideoFrameCallback) this.fresh = false;
+    this.lastCap = performance.now();
+    // Snapshot the frame at full resolution for display; send a downscaled copy for inference.
+    const frame = { canvas: this.pool.pop() || document.createElement('canvas'), t0: performance.now() };
+    frame.canvas.width = v.videoWidth; frame.canvas.height = v.videoHeight;
+    frame.canvas.getContext('2d').drawImage(v, 0, 0);
+    const s = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
+    const c = this.off;
+    c.width = Math.round(v.videoWidth * s);
+    c.height = Math.round(v.videoHeight * s);
+    c.getContext('2d').drawImage(frame.canvas, 0, 0, c.width, c.height);
+    this.pending.push(frame);
+    const blob = new Promise((res) => c.toBlob(res, 'image/jpeg', 0.8));
+    // Chain sends so frames reach the server in capture order even if encoding finishes out of order.
+    this.sendChain = this.sendChain.then(() => blob).then((b) => {
+      if (b && ws === this.ws && ws.readyState === WebSocket.OPEN) ws.send(b);
+    });
+  },
+
+  render(r, frame) {
+    const cv = $('camOverlay'), ctx = cv.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const cw = cv.clientWidth, ch = cv.clientHeight;
+    if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr)) {
+      cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    // Fit the frame (object-fit: contain) and map server coords onto it.
+    const s = Math.min(cw / r.width, ch / r.height);
+    const ox = (cw - r.width * s) / 2, oy = (ch - r.height * s) / 2;
+    ctx.drawImage(frame.canvas, ox, oy, r.width * s, r.height * s);
+    ctx.lineWidth = 2;
+    ctx.font = '600 12px -apple-system, sans-serif';
+    for (const d of r.detections) {
+      const [x1, y1, x2, y2] = d.box;
+      const x = ox + x1 * s, y = oy + y1 * s, w = (x2 - x1) * s, h = (y2 - y1) * s;
+      const col = COLORS[d.name] || '#fff';
+      ctx.strokeStyle = col;
+      ctx.strokeRect(x, y, w, h);
+      const label = `${d.name} ${Math.round(d.conf * 100)}%`;
+      const tw = ctx.measureText(label).width + 8;
+      const ly = y > 18 ? y - 18 : y;
+      ctx.fillStyle = col;
+      ctx.fillRect(x - 1, ly, tw, 18);
+      ctx.fillStyle = d.name === 'yellow_cone' ? '#111' : '#fff';
+      ctx.fillText(label, x + 3, ly + 13);
+    }
+    const c = countByClass(r.detections);
+    $('camBlue').textContent = c.blue_cone;
+    $('camYellow').textContent = c.yellow_cone;
+    $('camMs').textContent = r.ms.toFixed(1) + ' ms';
+    $('camLat').textContent = (performance.now() - frame.t0).toFixed(0) + ' ms';
+    this.frames++;
+    const now = performance.now();
+    if (now - this.fpsT >= 1000) {
+      $('camFps').textContent = (this.frames * 1000 / (now - this.fpsT)).toFixed(1);
+      this.frames = 0; this.fpsT = now;
+    }
+  },
+
+  stop(silent) {
+    this.running = false;
+    this.pylon = false;
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) ws.close();
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.clearPending();
+    $('camVid').srcObject = null;
+    const cv = $('camOverlay');
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    if (!silent) {
+      $('camPh').textContent = 'Camera is off';
+      $('camPh').classList.remove('hidden');
+      $('camStart').disabled = false; $('camStop').disabled = true;
+      $('camFps').textContent = $('camMs').textContent = $('camLat').textContent = '-';
+    }
+  },
+};
+
+$('camStart').addEventListener('click', () => cam.start());
+$('camStop').addEventListener('click', () => cam.stop());
+$('camRefresh').addEventListener('click', () => cam.listDevices().catch((e) => toast('Could not list cameras: ' + e.message)));
+$('camSel').addEventListener('change', () => { if (cam.running) cam.start(); });
+window.addEventListener('beforeunload', () => cam.stop(true));
+</script>
+</body>
+</html>

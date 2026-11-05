@@ -111,3 +111,4 @@ table.det tr.sel { background: #1d2a3f; }
   .slider-wrap { order: 5; flex: 1 1 100%; }
   .btn { padding: 9px 14px; } .btn.small { padding: 7px 11px; }
 }
+.kp-size { width: 5em; margin-left: 4px; }

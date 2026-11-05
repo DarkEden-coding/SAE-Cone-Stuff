@@ -1,0 +1,21 @@
+[project]
+name = "local-cone-detector"
+version = "0.1.0"
+description = "Local cone detection webapp (YOLO26m CoreML)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "ultralytics>=8.4",
+    "coremltools>=9.0",
+    # coremltools is only tested up to torch 2.7; newer torch breaks CoreML export
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    "numpy<2.3",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "opencv-python",
+    "pypylon>=26.8",
+]
+
+[tool.uv]
+package = false

@@ -45,12 +45,10 @@ def parse_image(data: bytes) -> bool:
 
 
 class Watcher:
-    """Queue for one browser. Under backpressure the oldest ``frame`` is dropped; a single pending
-    preview image (latest wins) is kept apart so it never displaces or delays text messages."""
+    """Metadata queue for one browser. Under backpressure the oldest ``frame`` is dropped."""
 
     def __init__(self) -> None:
         self.items: deque[tuple[str, str]] = deque()
-        self.image: bytes | None = None
         self.ready = asyncio.Event()
 
     def push(self, kind: str, text: str) -> None:
@@ -62,18 +60,30 @@ class Watcher:
         self.items.append((kind, text))
         self.ready.set()
 
-    def push_image(self, data: bytes) -> None:
+    async def get(self) -> tuple[str, str]:
+        while not self.items:
+            self.ready.clear()
+            await self.ready.wait()
+        return self.items.popleft()
+
+
+class ImageWatcher:
+    """One browser's preview images: a single pending slot, the newest image wins."""
+
+    def __init__(self) -> None:
+        self.image: bytes | None = None
+        self.ready = asyncio.Event()
+
+    def push(self, data: bytes) -> None:
         self.image = data
         self.ready.set()
 
-    async def get(self) -> tuple[str, str | bytes]:
-        while not self.items and self.image is None:
+    async def get(self) -> bytes:
+        while self.image is None:
             self.ready.clear()
             await self.ready.wait()
-        if self.items:
-            return self.items.popleft()
         data, self.image = self.image, None
-        return "image", data
+        return data
 
 
 class Session:
@@ -84,6 +94,7 @@ class Session:
         self.latest: dict[str, tuple[str, str]] = {}
         self.latest_image: bytes | None = None  # memory only, never logged
         self.watchers: set[Watcher] = set()
+        self.image_watchers: set[ImageWatcher] = set()
         self.connections = 0
         self.dirty = False
         self.deleted = False
@@ -154,6 +165,9 @@ class LiveStore:
                 session = self.sessions[session_id] = Session(self._new_meta(session_id, hello))
                 self._save(session_id, session)
             return session
+
+    def find(self, session_id: str) -> Session | None:
+        return self._get(session_id) if valid_id(session_id) else None
 
     def view(self, session_id: str) -> dict:
         with self.lock:
@@ -230,15 +244,17 @@ class LiveStore:
             self._publish(session, message, text)
             return True
 
-    def ingest_image(self, session: Session, data: bytes) -> None:
-        """Keep and relay a preview image; it is not stored in the stream and does not touch counters."""
+    def ingest_image(self, session: Session, data: bytes) -> bool:
+        """Keep and relay a preview image; it is not stored in the stream and does not touch counters.
+        False if the session was deleted."""
         with self.lock:
             if session.deleted:
-                return
+                return False
             session.latest_image = data
             session.meta["updated_at"] = now()
-            for watcher in session.watchers:
-                watcher.push_image(data)
+            for watcher in session.image_watchers:
+                watcher.push(data)
+            return True
 
     @staticmethod
     def _recording_entry(meta: dict, recording_id: str) -> dict:
@@ -277,9 +293,18 @@ class LiveStore:
             for kind in ("hello", "map", "frame"):
                 if kind in session.latest:
                     watcher.push(*session.latest[kind])
-            if session.latest_image is not None:
-                watcher.push_image(session.latest_image)
             session.watchers.add(watcher)
+            return session, watcher
+
+    def subscribe_images(self, session_id: str) -> tuple[Session, ImageWatcher]:
+        with self.lock:
+            session = self._get(session_id)
+            if session is None:
+                raise KeyError(session_id)
+            watcher = ImageWatcher()
+            if session.latest_image is not None:
+                watcher.push(session.latest_image)
+            session.image_watchers.add(watcher)
             return session, watcher
 
     # --- logs --------------------------------------------------------------------------------
@@ -403,7 +428,7 @@ def register(app: FastAPI, settings: Settings) -> LiveStore:
                     break
                 message = None  # malformed messages are ignored
                 if incoming.get("bytes") is not None:
-                    if parse_image(incoming["bytes"]):
+                    if parse_image(incoming["bytes"]):  # older phone builds send images here
                         store.ingest_image(session, incoming["bytes"])
                 elif incoming.get("text") is not None:
                     try:
@@ -415,6 +440,26 @@ def register(app: FastAPI, settings: Settings) -> LiveStore:
         finally:
             ack_task.cancel()
             store.close_ingest(session_id, session, said_bye)
+
+    @app.websocket("/api/live/ingest/images")
+    async def ingest_images(websocket: WebSocket, session_id: str = ""):
+        if not await authorized(websocket):
+            return
+        session = store.find(session_id)
+        if session is None:
+            await websocket.close(code=4404, reason="Live session not found")
+            return
+        try:
+            while True:
+                incoming = await websocket.receive()
+                if incoming["type"] == "websocket.disconnect":
+                    return
+                data = incoming.get("bytes")  # text is ignored
+                if data is not None and parse_image(data) and not store.ingest_image(session, data):
+                    await websocket.close(code=4404, reason="session deleted")
+                    return
+        except (WebSocketDisconnect, RuntimeError):
+            pass
 
     @app.get("/api/live/sessions")
     def list_sessions():
@@ -457,10 +502,7 @@ def register(app: FastAPI, settings: Settings) -> LiveStore:
             try:
                 while True:
                     kind, payload = await watcher.get()
-                    if isinstance(payload, bytes):
-                        await websocket.send_bytes(payload)
-                    else:
-                        await websocket.send_text(payload)
+                    await websocket.send_text(payload)
                     if kind == "bye":
                         await websocket.close()
                         return
@@ -481,6 +523,38 @@ def register(app: FastAPI, settings: Settings) -> LiveStore:
             for task in tasks:
                 task.cancel()
             session.watchers.discard(watcher)
+
+    @app.websocket("/api/live/sessions/{session_id}/images")
+    async def watch_images(websocket: WebSocket, session_id: str):
+        if not await authorized(websocket):
+            return
+        try:
+            session, watcher = store.subscribe_images(session_id_or_404(session_id))
+        except (KeyError, HTTPException):
+            await websocket.close(code=4404, reason="Live session not found")
+            return
+
+        async def relay() -> None:
+            try:
+                while True:
+                    await websocket.send_bytes(await watcher.get())
+            except Exception:  # the browser went away
+                return
+
+        async def until_disconnect() -> None:
+            try:
+                while True:
+                    await websocket.receive_text()
+            except Exception:
+                return
+
+        tasks = [asyncio.create_task(relay()), asyncio.create_task(until_disconnect())]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                task.cancel()
+            session.image_watchers.discard(watcher)
 
     @app.delete("/api/live/sessions/{session_id}", status_code=204)
     async def delete_session(session_id: str):

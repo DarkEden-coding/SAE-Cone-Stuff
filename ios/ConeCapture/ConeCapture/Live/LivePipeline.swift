@@ -97,6 +97,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
     private var pendingReset = false
     private var clockOrigin: TimeInterval?      // ARFrame timestamp - session clock
     private let preview: LivePreviewEncoder?
+    private let imageStreamer: LiveImageStreamer?
 
     // Processing-queue state.
     private var frameCount = 0
@@ -106,6 +107,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
     private var smoothedFPS = 0.0
     private var lastFrameT: Double?
     private var trail: [SIMD2<Double>] = []
+    private var lastPose: Pose?                 // shown grey while the SLAM has no pose
     private var recording: (id: String, log: LiveLogWriter?, recorder: VideoRecorder)?
 
     init(config: Config, gravity: GravityHistory) throws {
@@ -121,12 +123,15 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         }
         let streamer = config.stream && !config.baseURL.isEmpty ? LiveStreamer(baseURL: config.baseURL, token: config.token) : nil
         self.streamer = streamer
-        if let streamer, config.cameraPreview {
+        if streamer != nil, config.cameraPreview {
+            let images = LiveImageStreamer(baseURL: config.baseURL, token: config.token, sessionID: sessionID)
             let preview = LivePreviewEncoder(rotation: config.rotation, imageSize: detector.imageSize)
-            preview.onImage = { streamer.send($0, kind: .image) }
+            preview.onImage = { images.send($0) }
             self.preview = preview
+            imageStreamer = images
         } else {
             preview = nil
+            imageStreamer = nil
         }
     }
 
@@ -204,6 +209,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         queue.async { [self] in
             if recording != nil { recording?.log?.close(); recording = nil }
             streamer?.stop(bye: LiveCoding.encode(LiveBye(t: now())))
+            imageStreamer?.stop()
         }
     }
 
@@ -223,7 +229,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         pendingReset = false
         let skippedFrames = skipped
         lock.unlock()
-        if reset { slam.reset(); trail = []; lastMapT = -.infinity }   // send the empty map at once
+        if reset { slam.reset(); trail = []; lastPose = nil; lastMapT = -.infinity }   // send the empty map at once
         let rotation = config.rotation
         let bufferSize = PixelSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
         let imageSize = detector.imageSize
@@ -267,6 +273,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
             let data = LiveCoding.encode(hello)
             helloData = data
             streamer?.start(hello: data)
+            imageStreamer?.start()          // its socket needs the session, created by this hello
             recording?.log?.append(data)
         }
 
@@ -275,14 +282,17 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
             rec = LiveRecordingRef(recordingID: r.id, t: timestamp - first)
         }
         let liveDetections = detections.enumerated().map { i, d in
-            LiveDetection(classID: d.classID, conf: d.conf, box: [d.box.x, d.box.y, d.box.z, d.box.w],
-                          keypoints: d.keypoints.map { [$0.x, $0.y, $0.z] },
-                          pCam: result.measurements[i].map { [$0.pCam.x, $0.pCam.y, $0.pCam.z] },
+            // Rounded to what the data supports: keeps each frame message small (~1 KB) and fast.
+            LiveDetection(classID: d.classID, conf: round(d.conf, 1000),
+                          box: [d.box.x, d.box.y, d.box.z, d.box.w].map { round($0, 10) },
+                          keypoints: d.keypoints.map { [round($0.x, 10), round($0.y, 10), round($0.z, 1000)] },
+                          pCam: result.measurements[i].map { [$0.pCam.x, $0.pCam.y, $0.pCam.z].map { round($0, 1000) } },
                           landmarkID: result.landmarkOf[i])
         }
-        let message = LiveFrame(i: frameCount, t: t, status: result.status.rawValue, T: result.pose?.matrix, K: k.rowMajorK,
+        let message = LiveFrame(i: frameCount, t: round(t, 1e4), status: result.status.rawValue,
+                                T: result.pose?.matrix.map { $0.map { round($0, 1e6) } }, K: k.rowMajorK.map { $0.map { round($0, 100) } },
                                 imageSize: imageSize.asArray, detections: liveDetections, nInliers: result.nInliers, rec: rec,
-                                stats: LiveStats(detMs: detMs, slamMs: slamMs, fps: smoothedFPS))
+                                stats: LiveStats(detMs: round(detMs, 10), slamMs: round(slamMs, 100), fps: round(smoothedFPS, 10)))
         frameCount += 1
         emit(LiveCoding.encode(message), kind: .frame)
 
@@ -304,7 +314,9 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         }
         var snapshot = MinimapSnapshot(status: result.status.rawValue)
         snapshot.cones = landmarks.map { .init(id: $0.id, classID: $0.classID, x: $0.p.x, y: $0.p.y, confirmed: $0.confirmed) }
-        snapshot.camera = result.pose.map { .init(x: $0.t.x, y: $0.t.y, yaw: ConeSLAM.yaw(of: $0)) }
+        if let pose = result.pose { lastPose = pose }
+        snapshot.camera = lastPose.map { .init(x: $0.t.x, y: $0.t.y, yaw: ConeSLAM.yaw(of: $0)) }
+        snapshot.cameraStale = result.pose == nil
         snapshot.trail = trail
 
         let toView = { (p: SIMD2<Double>) -> CGPoint in
@@ -335,3 +347,6 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         return LiveDevice(model: d.model, system: d.system, appVersion: d.appVersion)
     }
 }
+
+/// Rounds to 1/scale (`round(1.23456, 100)` = 1.23); dividing keeps the shortest JSON representation.
+@inline(__always) private func round(_ x: Double, _ scale: Double) -> Double { (x * scale).rounded() / scale }

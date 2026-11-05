@@ -70,14 +70,15 @@ struct MinimapView: View {
             wedge.addLine(to: CGPoint(x: origin.x - wedgeLen * tan(Self.fovHalfAngle), y: origin.y - wedgeLen))
             wedge.addLine(to: CGPoint(x: origin.x + wedgeLen * tan(Self.fovHalfAngle), y: origin.y - wedgeLen))
             wedge.closeSubpath()
-            ctx.fill(wedge, with: .color(.white.opacity(0.15)))
+            let tint: Color = snapshot.cameraStale ? .gray : .white
+            ctx.fill(wedge, with: .color(tint.opacity(snapshot.cameraStale ? 0.1 : 0.15)))
 
             var tri = Path()
             tri.move(to: CGPoint(x: origin.x, y: origin.y - 7))
             tri.addLine(to: CGPoint(x: origin.x - 5, y: origin.y + 5))
             tri.addLine(to: CGPoint(x: origin.x + 5, y: origin.y + 5))
             tri.closeSubpath()
-            ctx.fill(tri, with: .color(.white))
+            ctx.fill(tri, with: .color(tint))
         }
 
         drawScaleBar(&ctx, size, scale: scale)

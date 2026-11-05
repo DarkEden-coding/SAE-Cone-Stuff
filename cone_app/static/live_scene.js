@@ -34,7 +34,7 @@ export class LiveScene {
     const K = this.K;
     const frames = ((map && map.keyframes) || []).map((k) => ({ index: k.i, t: k.t, status: 'tracked', T_world_cam: k.T_world_cam, K, detections: [] }));
     frames.push(...tail);
-    if (!tail.length && cur && cur.T_world_cam) frames.push(cur);
+    if (!tail.length && cur) frames.push(cur); // a pose-less cur shows the last pose, greyed
     const mapChanged = map !== this.map || !this.built;
     if (mapChanged) {
       this.map = map;

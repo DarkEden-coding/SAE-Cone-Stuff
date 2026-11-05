@@ -132,52 +132,75 @@ class LiveTests(unittest.TestCase):
         header = {"type": "image", "t": t, "size": [480, 270], "image_size": [1280, 720]}
         return json.dumps(header).encode() + b"\n" + payload
 
-    @staticmethod
-    def receive_pair(watcher) -> tuple[str, bytes]:
-        """One text message and one binary one, in whichever order the relay delivers them."""
-        got = [watcher.receive(), watcher.receive()]
-        texts = [m["text"] for m in got if m.get("text") is not None]
-        blobs = [m["bytes"] for m in got if m.get("bytes") is not None]
-        assert len(texts) == len(blobs) == 1, got
-        return json.loads(texts[0])["type"], blobs[0]
-
-    def test_images_relayed_cached_and_not_logged(self):
+    def test_images_use_their_own_sockets_and_are_not_logged(self):
         first, second = self.image(.1), self.image(.2, b"\xff\xd8other")
+        images = f"/api/live/sessions/{SID}/images"
         with self.client() as client:
             with client.websocket_connect("/api/live/ingest") as phone:
                 phone.send_json(hello())
                 wait_for(lambda: client.get(f"/api/live/sessions/{SID}").json()["active"])
-                with client.websocket_connect(f"/api/live/sessions/{SID}/watch") as watcher:
+                with client.websocket_connect(f"/api/live/ingest/images?session_id={SID}") as camera, \
+                        client.websocket_connect(f"/api/live/sessions/{SID}/watch") as watcher, \
+                        client.websocket_connect(images) as viewer:
                     self.assertEqual(watcher.receive_json()["type"], "hello")
-                    phone.send_bytes(first)
-                    self.assertEqual(watcher.receive_bytes(), first)
-                    phone.send_bytes(second)
+                    camera.send_bytes(first)
+                    self.assertEqual(viewer.receive_bytes(), first)
+                    camera.send_text("ignored")
+                    camera.send_bytes(second)
                     phone.send_json(frame(0, .3))
-                    self.assertEqual(self.receive_pair(watcher), ("frame", second))
-                # A late watcher gets hello, frame, then the latest image only.
-                with client.websocket_connect(f"/api/live/sessions/{SID}/watch") as late:
-                    self.assertEqual([late.receive_json()["type"] for _ in range(2)], ["hello", "frame"])
+                    # The metadata socket carries text only: the next message is the frame, not an image.
+                    self.assertEqual(watcher.receive_json()["i"], 0)
+                    self.assertEqual(viewer.receive_bytes(), second)
+                # A late images watcher gets the latest image; a late /watch watcher gets no image.
+                with client.websocket_connect(images) as late, client.websocket_connect(f"/api/live/sessions/{SID}/watch") as text:
                     self.assertEqual(late.receive_bytes(), second)
+                    self.assertEqual([text.receive_json()["type"] for _ in range(2)], ["hello", "frame"])
                 session = client.get(f"/api/live/sessions/{SID}").json()
                 self.assertEqual((session["n_frames"], session["duration_s"]), (1, .3))
                 self.assertEqual([m["type"] for m in self.log(client)], ["hello", "frame"])
                 self.assertNotIn(b"jpeg", (self.settings.data_dir / "live" / SID / "stream.jsonl").read_bytes())
 
-    def test_malformed_images_are_ignored(self):
-        bad = [b"no newline", b'{"type":"image"}\n', b"not json\npayload", b'{"type":"frame"}\npayload',
-               b'["image"]\npayload', self.image(0, b"x" * (512 * 1024))]
+    def test_images_socket_needs_a_known_session(self):
+        with self.client() as client:
+            for query in ("?session_id=unknown", "", "?session_id=..%2fjobs"):
+                with client.websocket_connect(f"/api/live/ingest/images{query}") as camera:
+                    with self.assertRaises(WebSocketDisconnect) as caught:
+                        camera.receive_bytes()
+                self.assertEqual(caught.exception.code, 4404)
+            with client.websocket_connect("/api/live/sessions/unknown/images") as viewer:
+                with self.assertRaises(WebSocketDisconnect) as caught:
+                    viewer.receive_bytes()
+            self.assertEqual(caught.exception.code, 4404)
+
+    def test_legacy_binary_on_ingest_reaches_image_watchers(self):
+        legacy = self.image(.1)
         with self.client() as client:
             with client.websocket_connect("/api/live/ingest") as phone:
                 phone.send_json(hello())
-                with client.websocket_connect(f"/api/live/sessions/{SID}/watch") as watcher:
+                wait_for(lambda: client.get(f"/api/live/sessions/{SID}").json()["active"])
+                with client.websocket_connect(f"/api/live/sessions/{SID}/images") as viewer, \
+                        client.websocket_connect(f"/api/live/sessions/{SID}/watch") as watcher:
                     self.assertEqual(watcher.receive_json()["type"], "hello")
+                    phone.send_bytes(legacy)
+                    phone.send_json(frame(0, .2))
+                    self.assertEqual(viewer.receive_bytes(), legacy)
+                    self.assertEqual(watcher.receive_json()["type"], "frame")
+                self.assertEqual([m["type"] for m in self.log(client)], ["hello", "frame"])
+
+    def test_malformed_images_are_ignored(self):
+        bad = [b"no newline", b'{"type":"image"}\n', b"not json\npayload", b'{"type":"frame"}\npayload',
+               b'["image"]\npayload', self.image(0, b"x" * (512 * 1024))]
+        good = self.image(.5)
+        with self.client() as client:
+            with client.websocket_connect("/api/live/ingest") as phone:
+                phone.send_json(hello())
+                wait_for(lambda: client.get(f"/api/live/sessions/{SID}").json()["active"])
+                with client.websocket_connect(f"/api/live/ingest/images?session_id={SID}") as camera, \
+                        client.websocket_connect(f"/api/live/sessions/{SID}/images") as viewer:
                     for data in bad:
-                        phone.send_bytes(data)
-                    good = self.image(.5)
-                    phone.send_bytes(good)
-                    phone.send_json(frame(0, .6))
-                    self.assertEqual(self.receive_pair(watcher), ("frame", good))  # only the valid image arrives
-                self.assertEqual(client.get(f"/api/live/sessions/{SID}").json()["n_frames"], 1)
+                        camera.send_bytes(data)
+                    camera.send_bytes(good)
+                    self.assertEqual(viewer.receive_bytes(), good)  # only the valid image arrives
 
     def test_live_watcher_sees_disconnected_and_bye_closes(self):
         with self.client() as client:

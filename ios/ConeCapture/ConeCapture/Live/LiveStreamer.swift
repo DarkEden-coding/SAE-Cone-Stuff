@@ -10,12 +10,11 @@ import Foundation
 /// - `.frame`: droppable. At most `maxPendingFrames` wait; the oldest are dropped first.
 /// - `.map`: latest wins. Only the newest map is ever pending (and it is resent after a reconnect).
 /// - `.control`: never dropped, sent in order (hello / recording / bye).
-/// - `.image`: camera preview, sent as a binary message. Latest wins, lowest priority: an image goes out
-///   only when nothing else is pending, and a newer image replaces an unsent one.
+/// Camera preview images use their own socket (`LiveImageStreamer`) so they never delay metadata.
 ///
 /// On every (re)connect the order is: stored hello, latest map, pending control messages.
 final class LiveStreamer: ObservableObject {
-    enum Kind { case frame, map, control, image }
+    enum Kind { case frame, map, control }
     enum ConnectionState: Equatable { case offline, connecting, connected }
 
     static let maxPendingFrames = 8
@@ -42,7 +41,6 @@ final class LiveStreamer: ObservableObject {
     private var hello: Data?
     private var latestMap: Data?
     private var pendingMap: Data?
-    private var pendingImage: Data?
     private var queue: [Item] = []          // frames and controls, in arrival order
     private var task: URLSessionWebSocketTask?
     private var generation = 0              // invalidates callbacks of dead connections
@@ -64,6 +62,11 @@ final class LiveStreamer: ObservableObject {
 
     /// `wss://host/api/live/ingest?token=...` from an http(s) base URL; nil if the base is unusable.
     static func ingestURL(base: String, token: String?) -> URL? {
+        endpointURL(base: base, path: "/api/live/ingest", token: token)
+    }
+
+    /// WebSocket URL for `path` on an http(s) base, with optional extra query items and the token.
+    static func endpointURL(base: String, path: String, token: String?, query: [(String, String)] = []) -> URL? {
         guard var c = URLComponents(string: base), let scheme = c.scheme?.lowercased(), c.host != nil else { return nil }
         switch scheme {
         case "https", "wss": c.scheme = "wss"
@@ -71,12 +74,15 @@ final class LiveStreamer: ObservableObject {
         default: return nil
         }
         while c.path.hasSuffix("/") { c.path.removeLast() }
-        c.path += "/api/live/ingest"
-        if let token, !token.isEmpty {
-            // URLQueryItem leaves "+" and "&" alone; encode strictly so the server decodes the same token.
-            var allowed = CharacterSet.alphanumerics
-            allowed.insert(charactersIn: "-._~")
-            c.percentEncodedQuery = "token=" + (token.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")
+        c.path += path
+        // URLQueryItem leaves "+" and "&" alone; encode strictly so the server decodes the same values.
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        var items = query
+        if let token, !token.isEmpty { items.append(("token", token)) }
+        if !items.isEmpty {
+            c.percentEncodedQuery = items.map { "\($0.0)=\($0.1.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }
+                .joined(separator: "&")
         }
         return c.url
     }
@@ -107,9 +113,6 @@ final class LiveStreamer: ObservableObject {
                 self.pendingMap = message
             case .control:
                 self.queue.append(Item(data: message, kind: .control))
-            case .image:
-                if self.pendingImage != nil { self.dropped += 1 }
-                self.pendingImage = message
             }
             self.pump()
         }
@@ -147,7 +150,6 @@ final class LiveStreamer: ObservableObject {
         needHello = true
         sending = false
         pendingMap = latestMap
-        pendingImage = nil
         queue.removeAll { $0.kind == .frame }       // stale after an outage
         setState(.connecting)
         t.resume()
@@ -172,7 +174,6 @@ final class LiveStreamer: ObservableObject {
         guard let task, !sending else { return }
         let gen = generation
         let data: Data
-        var binary = false
         var restore: Item?
         if needHello {
             guard let hello else { return }
@@ -183,18 +184,13 @@ final class LiveStreamer: ObservableObject {
             let item = queue.removeFirst()
             data = item.data
             restore = item.kind == .control ? item : nil
-        } else if let image = pendingImage, !stopping {
-            data = image
-            binary = true
-            pendingImage = nil
         } else {
             if stopping, currentState == .connected { finish() }
             return
         }
         let wasHello = needHello
         sending = true
-        let message: URLSessionWebSocketTask.Message = binary ? .data(data) : .string(String(decoding: data, as: UTF8.self))
-        task.send(message) { [weak self] error in
+        task.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] error in
             guard let self else { return }
             self.q.async {
                 guard gen == self.generation else { return }
@@ -243,7 +239,6 @@ final class LiveStreamer: ObservableObject {
         stopping = false
         queue.removeAll()
         pendingMap = nil
-        pendingImage = nil
         setState(.offline)
     }
 

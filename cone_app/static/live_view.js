@@ -156,7 +156,7 @@ export function mountLiveView(root, id) {
   }
 
   // ---------------------------------------------------------------- live
-  let ws = null, retry = null, backoff = 1000, ended = false, phone = 'waiting';
+  let ws = null, imgWs = null, imgRetry = null, retry = null, backoff = 1000, ended = false, phone = 'waiting';
   let liveMap = null, liveTail = [], latest = null, flushRaf = 0, sessionTimer = null, camTimer = 0;
 
   function connLabel() {
@@ -181,6 +181,25 @@ export function mountLiveView(root, id) {
     };
     sock.onclose = () => { if (ws !== sock) return; ws = null; if (dead || mode !== 'live' || ended) return; scheduleRetry(); };
     sock.onerror = () => { /* onclose follows */ };
+    openImages();
+  }
+  // camera preview on its own socket, so images never delay metadata; follows the metadata socket's lifetime
+  function openImages() {
+    closeImages();
+    const sock = liveWatchSocket(id, 'images');
+    if (!sock) return;
+    imgWs = sock;
+    sock.binaryType = 'arraybuffer';
+    sock.onmessage = (ev) => { if (typeof ev.data !== 'string') preview.push(ev.data); };
+    sock.onclose = () => {
+      if (imgWs !== sock) return;
+      imgWs = null;
+      if (!dead && mode === 'live' && !ended && ws) imgRetry = setTimeout(() => { if (ws && !imgWs) openImages(); }, 2000);
+    };
+  }
+  function closeImages() {
+    clearTimeout(imgRetry);
+    if (imgWs) { const s = imgWs; imgWs = null; s.close(); }
   }
   function scheduleRetry() {
     clearTimeout(retry);
@@ -201,7 +220,7 @@ export function mountLiveView(root, id) {
       }
       case 'recording': refreshSession(); break;
       case 'disconnected': phone = 'disconnected'; break;
-      case 'bye': ended = true; phone = 'ended'; if (ws) { const s = ws; ws = null; s.close(); } refreshSession(); break;
+      case 'bye': ended = true; phone = 'ended'; if (ws) { const s = ws; ws = null; s.close(); } closeImages(); refreshSession(); break;
       default: return; // ack and unknown types
     }
     connLabel();
@@ -219,6 +238,7 @@ export function mountLiveView(root, id) {
     clearTimeout(retry); retry = null; clearTimeout(sessionTimer); cancelAnimationFrame(flushRaf); flushRaf = 0;
     clearInterval(camTimer); camTimer = 0; preview.reset(); chips.cam.textContent = '-';
     if (ws) { const s = ws; ws = null; s.close(); }
+    closeImages();
   }
   function startLive() {
     stopReplay();

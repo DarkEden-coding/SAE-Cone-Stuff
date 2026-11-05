@@ -111,11 +111,12 @@ export const deleteLive = (id) => api('/api/live/sessions/' + encodeURIComponent
 export const getLiveLog = (id, recordingId) => api('/api/live/sessions/' + encodeURIComponent(id) + '/log'
   + (recordingId ? '?recording_id=' + encodeURIComponent(recordingId) : ''), { text: true });
 // browsers cannot set headers on WebSockets, hence ?token=
-export function liveWatchSocket(id) {
-  if (MOCK) return import('./live_mock.js').then((m) => new m.MockSocket());
+// endpoint: 'watch' (metadata, text) or 'images' (camera preview, binary; null in mock mode, whose watch socket carries both)
+export function liveWatchSocket(id, endpoint = 'watch') {
+  if (MOCK) return endpoint === 'watch' ? import('./live_mock.js').then((m) => new m.MockSocket()) : null;
   const t = getToken();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return new WebSocket(`${proto}//${location.host}/api/live/sessions/${encodeURIComponent(id)}/watch` + (t ? '?token=' + encodeURIComponent(t) : ''));
+  return new WebSocket(`${proto}//${location.host}/api/live/sessions/${encodeURIComponent(id)}/${endpoint}` + (t ? '?token=' + encodeURIComponent(t) : ''));
 }
 export function jobMediaUrl(jobId) {
   return mediaUrl({ media_url: `/api/jobs/${encodeURIComponent(jobId)}/media` });

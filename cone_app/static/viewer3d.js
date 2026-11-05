@@ -283,7 +283,7 @@ export class Viewer {
       this.frustum.matrix.copy(M).scale(new THREE.Vector3(k, k, k)); this.frustum.matrixWorldNeedsUpdate = true;
       this.setFrustumGeometry(f.K, ...this.imgSize);
       const stale = f.status === 'lost' || !this.poses[i];
-      const col = new THREE.Color(stale ? STATUS_COLORS.lost : STATUS_COLORS[f.status] || STATUS_COLORS.tracked);
+      const col = new THREE.Color(stale ? STATUS_COLORS.gap : STATUS_COLORS[f.status] || STATUS_COLORS.tracked);
       this.frustumLines.material.color.copy(col); this.frustumPlane.material.color.copy(col);
       this.frustumLines.material.opacity = stale ? 0.5 : 1; this.frustumLines.material.transparent = stale;
     }

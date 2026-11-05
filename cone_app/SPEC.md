@@ -262,6 +262,8 @@ Every message has `"type"` and `"t"` (seconds since the live session started, ph
   in `map.keyframes`.
 - Clients must ignore unknown message types and unknown fields.
 - `T_world_cam` is `null` while `status` is `waiting` or `lost`; `K` and `image_size` are always present.
+  Viewers keep showing the last known camera pose, greyed out, until a pose arrives again (never jump to
+  the origin).
 - `t` comes from one phone clock per session, so it stays monotonic across reconnects. Replay sorts by `t`;
   a recording's frames are those whose `rec.recording_id` matches, ordered by `rec.t`.
 - Class names and cone sizes are not repeated in live messages: use the class ids and dimensions above
@@ -272,7 +274,9 @@ Every message has `"type"` and `"t"` (seconds since the live session started, ph
 
 So a laptop can see roughly what the phone sees, the phone may also send a low-rate preview: about 15 fps,
 JPEG (quality ~0.5) of the **inference image** downscaled to 480 px on the long side (e.g. 480×270 or
-270×480), typically 10–25 KB each. Each image is one **binary** WebSocket message:
+270×480), typically 10–25 KB each. Images travel on **their own WebSockets**, separate from the metadata
+stream (phone → `/api/live/ingest/images`, server → browser `/api/live/sessions/{id}/images`), so a large
+image never delays a `frame` or `map` message. Each image is one **binary** WebSocket message:
 
 ```
 <UTF-8 JSON header>\n<JPEG bytes>
@@ -284,6 +288,8 @@ JPEG (quality ~0.5) of the **inference image** downscaled to 480 px on the long 
   to. A viewer scales overlays by `size / image_size` (same aspect ratio, same orientation).
 - `t` uses the same clock as `frame.t`. The viewer draws the latest image and the latest frame's overlays;
   they need not be the same instant.
+- Metadata is sent as fast as it is produced (every processed frame, typically 15–30 Hz); only images are
+  rate-limited.
 - Images are **live only**: the server relays them to watchers but does not write them to `stream.jsonl`
   or the session logs, and keeps only the latest image in memory (sent to a watcher when it connects).
   Images are the first thing to drop under congestion: the phone keeps at most one unsent image (latest
@@ -301,7 +307,9 @@ WebSocket endpoints and `GET .../log` also accept `?token=`.
 | GET | `/api/live/sessions` | `[LiveSession]` newest first |
 | GET | `/api/live/sessions/{id}` | `LiveSession` |
 | GET | `/api/live/sessions/{id}/log` | `application/x-ndjson`, every stored message in order. `?recording_id=` returns the uploaded log of that recording if present, else the slice of the stream between its `recording` start/stop messages (plus the last `hello` and `map` before the start). |
-| WS | `/api/live/sessions/{id}/watch` | Browser ← server. On connect the server sends the latest `hello`, latest `map`, latest `frame` and latest image (if any), then relays every new message as it arrives (text messages as text, images as binary). Ends with `bye` or when the phone disconnects (the server then sends `{"type":"disconnected","t":...}`; it may reconnect). |
+| WS | `/api/live/ingest/images?session_id=<id>` | Phone → server, camera preview images only (binary messages, format above). The session must already exist (its `hello` arrived on `/ingest`), otherwise the server closes with 4404 and the phone retries. Text messages on this socket are ignored. |
+| WS | `/api/live/sessions/{id}/images` | Browser ← server, images only (binary). On connect the server sends the latest image (if any), then relays new ones; at most one pending image per watcher (latest wins). |
+| WS | `/api/live/sessions/{id}/watch` | Browser ← server, metadata only (text). On connect the server sends the latest `hello`, latest `map` and latest `frame` (if any), then relays every new message as it arrives. Ends with `bye` or when the phone disconnects (the server then sends `{"type":"disconnected","t":...}`; it may reconnect). |
 | DELETE | `/api/live/sessions/{id}` | 204 |
 
 `LiveSession`:

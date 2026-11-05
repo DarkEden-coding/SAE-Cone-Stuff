@@ -4,6 +4,7 @@ uv run --locked python -m cone_app.tools.fake_live_phone --url ws://127.0.0.1:78
 """
 
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
 import time
@@ -20,6 +21,7 @@ from cone_app.tests.test_slam import K as SIM_K, simulate
 IMAGE_SIZE = [1280, 720]
 SCALE = IMAGE_SIZE[0] / 1920  # simulate() renders a 1920x1080 camera
 WAITING_FRAMES = 5
+LOST_FRAMES = 20  # a stretch of `lost` frames (no pose) at 20% of the lap
 MAP_EVERY_S, KEYFRAME_EVERY_S = 0.5, 0.5
 
 
@@ -75,7 +77,7 @@ def main() -> None:
     parser.add_argument("--name", default="Fake phone")
     parser.add_argument("--frames", type=int, default=600, help="one full lap is 600 frames")
     parser.add_argument("--images", action=argparse.BooleanOptionalAction, default=True,
-                        help="send a ~15 fps camera preview (binary messages)")
+                        help="send a ~15 fps camera preview on /ingest/images")
     args = parser.parse_args()
 
     frames, truth, landmarks, classes, _ = simulate(args.frames)
@@ -85,15 +87,20 @@ def main() -> None:
     session_id = str(uuid4())
     recording_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     rec_start, rec_stop = args.frames * 35 // 100, args.frames * 65 // 100
-    url = args.url.rstrip("/") + "/api/live/ingest" + (f"?token={quote(args.token)}" if args.token else "")
+    base = args.url.rstrip("/") + "/api/live/ingest"
+    token = f"token={quote(args.token)}" if args.token else ""
+    url = base + (f"?{token}" if token else "")
+    images_url = f"{base}/images?session_id={session_id}" + (f"&{token}" if token else "")
+    lost_start = args.frames // 5
 
     observations: dict[int, int] = {}
     keyframes: list[dict] = []
     next_map = next_keyframe = 0.0
     start = time.monotonic()
-    with connect(url, max_size=None) as ws:
-        def send(message: dict | bytes) -> None:
-            ws.send(message if isinstance(message, bytes) else json.dumps(message, separators=(",", ":")))
+    camera = None  # second connection, opened after the hello
+    with connect(url, max_size=None) as ws, ExitStack() as stack:
+        def send(message: dict) -> None:
+            ws.send(json.dumps(message, separators=(",", ":")))
             try:
                 while True:
                     ws.recv(timeout=0)  # drain acks
@@ -109,7 +116,7 @@ def main() -> None:
             while True:
                 elapsed = time.monotonic() - start
                 if args.images and elapsed >= next_image:
-                    send(preview_message(elapsed, detections))
+                    camera.send(preview_message(elapsed, detections))
                     next_image = max(next_image + 1 / PREVIEW_FPS, elapsed - 1 / PREVIEW_FPS)
                     continue
                 if elapsed >= t:
@@ -123,6 +130,8 @@ def main() -> None:
               "options": {"conf": 0.25, "kp_conf": 0.5, "kp_correction": True, "flat_ground": True,
                           "gravity_prior": True}})
         print(f"session {session_id}", flush=True)
+        if args.images:
+            camera = stack.enter_context(connect(images_url, max_size=None))
         for i, frame in enumerate(frames):
             t = i / args.rate
             wait_until(t)
@@ -130,21 +139,22 @@ def main() -> None:
                 send({"type": "recording", "t": round(t, 3), "event": "start", "recording_id": recording_id,
                       "name": "Fake lap"})
             waiting = i < WAITING_FRAMES
+            lost = lost_start <= i < lost_start + LOST_FRAMES
             detections[:] = link_detections(frame, truth[i], landmarks, classes)
             for det in detections:
-                if waiting:  # no map yet: detections only
+                if waiting or lost:  # no pose: detections only
                     det["p_cam"] = det["landmark_id"] = None
                 elif det["landmark_id"] is not None:
                     observations[det["landmark_id"]] = observations.get(det["landmark_id"], 0) + 1
             send({"type": "frame", "i": i, "t": round(t, 3),
-                  "status": "waiting" if waiting else "init" if i == WAITING_FRAMES else "tracked",
-                  "T_world_cam": None if waiting else np.round(truth[i], 5).tolist(), "K": K_json,
+                  "status": "waiting" if waiting else "lost" if lost else "init" if i == WAITING_FRAMES else "tracked",
+                  "T_world_cam": None if waiting or lost else np.round(truth[i], 5).tolist(), "K": K_json,
                   "image_size": IMAGE_SIZE, "detections": detections,
                   "n_inliers": sum(d["landmark_id"] is not None for d in detections),
                   "rec": {"recording_id": recording_id, "t": round(t - rec_start / args.rate, 3)}
                   if rec_start <= i < rec_stop else None,
                   "stats": {"det_ms": 18.0, "slam_ms": 6.0, "fps": args.rate}})
-            if not waiting and t >= next_keyframe:
+            if not (waiting or lost) and t >= next_keyframe:
                 keyframes.append({"i": i, "t": round(t, 3), "T_world_cam": np.round(truth[i], 5).tolist()})
                 next_keyframe = t + KEYFRAME_EVERY_S
             if not waiting and t >= next_map:

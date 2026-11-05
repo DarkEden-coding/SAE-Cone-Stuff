@@ -189,6 +189,8 @@ struct MinimapSnapshot: Equatable {
     struct Camera: Equatable { var x: Double; var y: Double; var yaw: Double }   // yaw of the optical axis, rad
     var cones: [Cone] = []
     var camera: Camera?
+    /// No pose this frame: `camera` is the last known pose, drawn grey.
+    var cameraStale = false
     var trail: [SIMD2<Double>] = []
     var status: String = "waiting"
 }

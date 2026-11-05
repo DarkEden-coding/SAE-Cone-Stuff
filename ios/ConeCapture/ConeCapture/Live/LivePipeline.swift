@@ -68,6 +68,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         var conf: Double
         var keypointCorrection: Bool
         var stream: Bool
+        var cameraPreview: Bool
         var baseURL: String
         var token: String?
         var name: String?
@@ -94,9 +95,10 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
     private var orientation = UIInterfaceOrientation.portrait
     private var skipped = 0
     private var pendingReset = false
+    private var clockOrigin: TimeInterval?      // ARFrame timestamp - session clock
+    private let preview: LivePreviewEncoder?
 
     // Processing-queue state.
-    private var t0: TimeInterval?
     private var frameCount = 0
     private var helloData: Data?
     private var lastMapT = -1.0
@@ -117,7 +119,15 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         } else {
             correction = nil
         }
-        streamer = config.stream && !config.baseURL.isEmpty ? LiveStreamer(baseURL: config.baseURL, token: config.token) : nil
+        let streamer = config.stream && !config.baseURL.isEmpty ? LiveStreamer(baseURL: config.baseURL, token: config.token) : nil
+        self.streamer = streamer
+        if let streamer, config.cameraPreview {
+            let preview = LivePreviewEncoder(rotation: config.rotation, imageSize: detector.imageSize)
+            preview.onImage = { streamer.send($0, kind: .image) }
+            self.preview = preview
+        } else {
+            preview = nil
+        }
     }
 
     // MARK: Main thread
@@ -135,6 +145,13 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
     /// Non-blocking: drops the frame while the previous one is still being processed.
     func handle(_ frame: ARFrame) {
         lock.lock()
+        if clockOrigin == nil { clockOrigin = frame.timestamp - now() }
+        let t = frame.timestamp - clockOrigin!
+        if !stopped, let preview {
+            lock.unlock()
+            preview.offer(frame.capturedImage, t: t)
+            lock.lock()
+        }
         if busy || stopped {
             if busy { skipped += 1 }
             lock.unlock()
@@ -150,7 +167,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         let display = size.width > 0 ? frame.displayTransform(for: orientation, viewportSize: size) : .identity
         queue.async { [self] in
             autoreleasepool {
-                process(buffer, timestamp: timestamp, intrinsics: intrinsics, reference: reference,
+                process(buffer, timestamp: timestamp, t: t, intrinsics: intrinsics, reference: reference,
                         display: display, viewport: size)
             }
             lock.lock(); busy = false; lock.unlock()
@@ -199,7 +216,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         recording?.log?.append(data)
     }
 
-    private func process(_ buffer: CVPixelBuffer, timestamp: TimeInterval, intrinsics: CameraIntrinsics,
+    private func process(_ buffer: CVPixelBuffer, timestamp: TimeInterval, t: Double, intrinsics: CameraIntrinsics,
                          reference: CGSize, display: CGAffineTransform, viewport: CGSize) {
         lock.lock()
         let reset = pendingReset
@@ -207,8 +224,6 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         let skippedFrames = skipped
         lock.unlock()
         if reset { slam.reset(); trail = [] }
-        if t0 == nil { t0 = timestamp - now() }
-        let t = timestamp - t0!
         let rotation = config.rotation
         let bufferSize = PixelSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
         let imageSize = detector.imageSize

@@ -88,15 +88,40 @@ export function mockLog(recordingId) {
 // Minimal WebSocket stand-in: replays the stream in real time, ends with "bye".
 export class MockSocket {
   constructor() {
-    this.readyState = 0; this.timers = [];
+    this.readyState = 0; this.timers = []; this.t0 = performance.now() + 100;
     const msgs = messages();
     setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 50);
     msgs.forEach((m) => this.timers.push(setTimeout(() => this.onmessage?.({ data: JSON.stringify(m) }), 100 + m.t * 1000)));
     this.timers.push(setTimeout(() => this.close(), 100 + DURATION * 1000 + 100));
+    this.timers.push(setInterval(() => this.sendImage(), 200));
+  }
+  // binary preview message: JSON header, newline, JPEG (a gradient with the projected cones as dots)
+  sendImage() {
+    if (this.readyState !== 1) return;
+    const t = (performance.now() - this.t0) / 1000, T = pose(t);
+    const c = document.createElement('canvas'); c.width = 480; c.height = 270;
+    const g = c.getContext('2d'), k = c.width / W;
+    const bg = g.createLinearGradient(0, 0, 0, c.height);
+    bg.addColorStop(0, '#46586a'); bg.addColorStop(0.5, '#222'); bg.addColorStop(1, '#14181c');
+    g.fillStyle = bg; g.fillRect(0, 0, c.width, c.height);
+    for (const cone of CONES) {
+      const d = detection(T, cone);
+      if (!d) continue;
+      g.fillStyle = cone.class_id === 0 ? '#2f80ff' : '#ffd400';
+      g.fillRect(d.box_xyxy[0] * k, d.box_xyxy[1] * k, (d.box_xyxy[2] - d.box_xyxy[0]) * k, (d.box_xyxy[3] - d.box_xyxy[1]) * k);
+    }
+    c.toBlob(async (blob) => {
+      if (!blob || this.readyState !== 1) return;
+      const head = new TextEncoder().encode(JSON.stringify({ type: 'image', t: r3(t), size: [c.width, c.height], image_size: [W, H] }) + '\n');
+      const body = new Uint8Array(await blob.arrayBuffer());
+      const out = new Uint8Array(head.length + body.length);
+      out.set(head); out.set(body, head.length);
+      this.onmessage?.({ data: out.buffer });
+    }, 'image/jpeg', 0.5);
   }
   close() {
     if (this.readyState === 3) return;
-    this.readyState = 3; this.timers.forEach(clearTimeout);
+    this.readyState = 3; this.timers.forEach((id) => { clearTimeout(id); clearInterval(id); });
     this.onclose?.({ code: 1000 });
   }
 }

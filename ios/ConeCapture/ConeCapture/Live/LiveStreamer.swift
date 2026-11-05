@@ -10,10 +10,12 @@ import Foundation
 /// - `.frame`: droppable. At most `maxPendingFrames` wait; the oldest are dropped first.
 /// - `.map`: latest wins. Only the newest map is ever pending (and it is resent after a reconnect).
 /// - `.control`: never dropped, sent in order (hello / recording / bye).
+/// - `.image`: camera preview, sent as a binary message. Latest wins, lowest priority: an image goes out
+///   only when nothing else is pending, and a newer image replaces an unsent one.
 ///
 /// On every (re)connect the order is: stored hello, latest map, pending control messages.
 final class LiveStreamer: ObservableObject {
-    enum Kind { case frame, map, control }
+    enum Kind { case frame, map, control, image }
     enum ConnectionState: Equatable { case offline, connecting, connected }
 
     static let maxPendingFrames = 8
@@ -40,6 +42,7 @@ final class LiveStreamer: ObservableObject {
     private var hello: Data?
     private var latestMap: Data?
     private var pendingMap: Data?
+    private var pendingImage: Data?
     private var queue: [Item] = []          // frames and controls, in arrival order
     private var task: URLSessionWebSocketTask?
     private var generation = 0              // invalidates callbacks of dead connections
@@ -104,6 +107,9 @@ final class LiveStreamer: ObservableObject {
                 self.pendingMap = message
             case .control:
                 self.queue.append(Item(data: message, kind: .control))
+            case .image:
+                if self.pendingImage != nil { self.dropped += 1 }
+                self.pendingImage = message
             }
             self.pump()
         }
@@ -141,6 +147,7 @@ final class LiveStreamer: ObservableObject {
         needHello = true
         sending = false
         pendingMap = latestMap
+        pendingImage = nil
         queue.removeAll { $0.kind == .frame }       // stale after an outage
         setState(.connecting)
         t.resume()
@@ -165,6 +172,7 @@ final class LiveStreamer: ObservableObject {
         guard let task, !sending else { return }
         let gen = generation
         let data: Data
+        var binary = false
         var restore: Item?
         if needHello {
             guard let hello else { return }
@@ -175,13 +183,18 @@ final class LiveStreamer: ObservableObject {
             let item = queue.removeFirst()
             data = item.data
             restore = item.kind == .control ? item : nil
+        } else if let image = pendingImage, !stopping {
+            data = image
+            binary = true
+            pendingImage = nil
         } else {
             if stopping, currentState == .connected { finish() }
             return
         }
         let wasHello = needHello
         sending = true
-        task.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] error in
+        let message: URLSessionWebSocketTask.Message = binary ? .data(data) : .string(String(decoding: data, as: UTF8.self))
+        task.send(message) { [weak self] error in
             guard let self else { return }
             self.q.async {
                 guard gen == self.generation else { return }
@@ -230,6 +243,7 @@ final class LiveStreamer: ObservableObject {
         stopping = false
         queue.removeAll()
         pendingMap = nil
+        pendingImage = nil
         setState(.offline)
     }
 

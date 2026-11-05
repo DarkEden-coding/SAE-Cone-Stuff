@@ -10,6 +10,7 @@ import time
 from urllib.parse import quote
 from uuid import uuid4
 
+import cv2
 import numpy as np
 from websockets.sync.client import connect
 
@@ -43,6 +44,29 @@ def link_detections(frame: dict, pose: np.ndarray, landmarks: np.ndarray, classe
     return out
 
 
+PREVIEW_SIZE = (480, 270)
+PREVIEW_FPS = 15
+CLASS_BGR = {0: (255, 128, 0), 1: (0, 128, 255), 2: (0, 165, 255), 3: (160, 160, 160), 4: (0, 230, 255)}
+
+
+def preview_message(t: float, detections: list[dict]) -> bytes:
+    """Binary ``image`` message: JSON header, newline, 480x270 JPEG of the dark scene and the cones."""
+    width, height = PREVIEW_SIZE
+    canvas = np.full((height, width, 3), (45, 50, 55), np.uint8)
+    canvas[: height // 2] = (90, 70, 60)  # sky above the horizon
+    cv2.line(canvas, (0, height // 2), (width, height // 2), (150, 150, 150), 1)
+    scale = width / IMAGE_SIZE[0]
+    for det in detections:
+        points = np.asarray(det["keypoints"])
+        points = points[points[:, 2] > 0, :2] * scale
+        if len(points) >= 3:
+            hull = cv2.convexHull(points.astype(np.int32))
+            cv2.fillConvexPoly(canvas, hull, CLASS_BGR.get(det["class_id"], (200, 200, 200)))
+    ok, jpeg = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 50])
+    header = {"type": "image", "t": round(t, 3), "size": list(PREVIEW_SIZE), "image_size": IMAGE_SIZE}
+    return json.dumps(header, separators=(",", ":")).encode() + b"\n" + jpeg.tobytes()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="ws://127.0.0.1:7870")
@@ -50,6 +74,8 @@ def main() -> None:
     parser.add_argument("--rate", type=float, default=12, help="frames per second")
     parser.add_argument("--name", default="Fake phone")
     parser.add_argument("--frames", type=int, default=600, help="one full lap is 600 frames")
+    parser.add_argument("--images", action=argparse.BooleanOptionalAction, default=True,
+                        help="send a ~15 fps camera preview (binary messages)")
     args = parser.parse_args()
 
     frames, truth, landmarks, classes, _ = simulate(args.frames)
@@ -66,13 +92,29 @@ def main() -> None:
     next_map = next_keyframe = 0.0
     start = time.monotonic()
     with connect(url, max_size=None) as ws:
-        def send(message: dict) -> None:
-            ws.send(json.dumps(message, separators=(",", ":")))
+        def send(message: dict | bytes) -> None:
+            ws.send(message if isinstance(message, bytes) else json.dumps(message, separators=(",", ":")))
             try:
                 while True:
                     ws.recv(timeout=0)  # drain acks
             except TimeoutError:
                 pass
+
+        detections: list[dict] = []
+        next_image = 0.0  # preview time, seconds since start
+
+        def wait_until(t: float) -> None:
+            """Sleep until stream time t, sending preview images (latest detections) at PREVIEW_FPS meanwhile."""
+            nonlocal next_image
+            while True:
+                elapsed = time.monotonic() - start
+                if args.images and elapsed >= next_image:
+                    send(preview_message(elapsed, detections))
+                    next_image = max(next_image + 1 / PREVIEW_FPS, elapsed - 1 / PREVIEW_FPS)
+                    continue
+                if elapsed >= t:
+                    return
+                time.sleep(max(0.0, min(t, next_image if args.images else t) - elapsed))
 
         send({"type": "hello", "schema": "cone-live/1", "session_id": session_id, "t": 0.0,
               "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "name": args.name,
@@ -83,12 +125,12 @@ def main() -> None:
         print(f"session {session_id}", flush=True)
         for i, frame in enumerate(frames):
             t = i / args.rate
-            time.sleep(max(0.0, start + t - time.monotonic()))
+            wait_until(t)
             if i == rec_start:
                 send({"type": "recording", "t": round(t, 3), "event": "start", "recording_id": recording_id,
                       "name": "Fake lap"})
             waiting = i < WAITING_FRAMES
-            detections = link_detections(frame, truth[i], landmarks, classes)
+            detections[:] = link_detections(frame, truth[i], landmarks, classes)
             for det in detections:
                 if waiting:  # no map yet: detections only
                     det["p_cam"] = det["landmark_id"] = None

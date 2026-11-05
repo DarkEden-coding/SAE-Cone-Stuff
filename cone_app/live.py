@@ -20,6 +20,7 @@ SCHEMA = "cone-live/1"
 ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 ACK_INTERVAL_S = 2.0
 WATCHER_LIMIT = 256  # queued messages before a slow watcher starts losing frames
+IMAGE_LIMIT_BYTES = 512 * 1024
 NDJSON = "application/x-ndjson"
 
 
@@ -31,11 +32,25 @@ def encode(message: dict) -> str:
     return json.dumps(message, separators=(",", ":"))
 
 
+def parse_image(data: bytes) -> bool:
+    """Light check of a binary preview message: ``<json header>\\n<jpeg>`` with ``type: image``."""
+    header, newline, payload = data.partition(b"\n")
+    if not newline or not payload or len(data) > IMAGE_LIMIT_BYTES:
+        return False
+    try:
+        parsed = json.loads(header)
+    except ValueError:
+        return False
+    return isinstance(parsed, dict) and parsed.get("type") == "image"
+
+
 class Watcher:
-    """Queue for one browser. Under backpressure the oldest ``frame`` is dropped, nothing else."""
+    """Queue for one browser. Under backpressure the oldest ``frame`` is dropped; a single pending
+    preview image (latest wins) is kept apart so it never displaces or delays text messages."""
 
     def __init__(self) -> None:
         self.items: deque[tuple[str, str]] = deque()
+        self.image: bytes | None = None
         self.ready = asyncio.Event()
 
     def push(self, kind: str, text: str) -> None:
@@ -47,11 +62,18 @@ class Watcher:
         self.items.append((kind, text))
         self.ready.set()
 
-    async def get(self) -> tuple[str, str]:
-        while not self.items:
+    def push_image(self, data: bytes) -> None:
+        self.image = data
+        self.ready.set()
+
+    async def get(self) -> tuple[str, str | bytes]:
+        while not self.items and self.image is None:
             self.ready.clear()
             await self.ready.wait()
-        return self.items.popleft()
+        if self.items:
+            return self.items.popleft()
+        data, self.image = self.image, None
+        return "image", data
 
 
 class Session:
@@ -60,6 +82,7 @@ class Session:
     def __init__(self, meta: dict) -> None:
         self.meta = meta
         self.latest: dict[str, tuple[str, str]] = {}
+        self.latest_image: bytes | None = None  # memory only, never logged
         self.watchers: set[Watcher] = set()
         self.connections = 0
         self.dirty = False
@@ -157,6 +180,7 @@ class LiveStore:
             if session is None:
                 raise KeyError(session_id)
             session.deleted = True
+            session.latest_image = None
             self.sessions.pop(session_id, None)
             shutil.rmtree(self.directory(session_id), ignore_errors=True)
             self._publish(session, {"type": "bye", "t": session.meta["duration_s"]})
@@ -206,6 +230,16 @@ class LiveStore:
             self._publish(session, message, text)
             return True
 
+    def ingest_image(self, session: Session, data: bytes) -> None:
+        """Keep and relay a preview image; it is not stored in the stream and does not touch counters."""
+        with self.lock:
+            if session.deleted:
+                return
+            session.latest_image = data
+            session.meta["updated_at"] = now()
+            for watcher in session.watchers:
+                watcher.push_image(data)
+
     @staticmethod
     def _recording_entry(meta: dict, recording_id: str) -> dict:
         for entry in meta["recordings"]:
@@ -243,6 +277,8 @@ class LiveStore:
             for kind in ("hello", "map", "frame"):
                 if kind in session.latest:
                     watcher.push(*session.latest[kind])
+            if session.latest_image is not None:
+                watcher.push_image(session.latest_image)
             session.watchers.add(watcher)
             return session, watcher
 
@@ -362,10 +398,18 @@ def register(app: FastAPI, settings: Settings) -> LiveStore:
                         await websocket.close(code=4404, reason="session deleted")
                         return
                     said_bye = said_bye or message["type"] == "bye"
-                try:
-                    message = json.loads(await websocket.receive_text())
-                except ValueError:
-                    message = None  # ignore malformed messages
+                incoming = await websocket.receive()
+                if incoming["type"] == "websocket.disconnect":
+                    break
+                message = None  # malformed messages are ignored
+                if incoming.get("bytes") is not None:
+                    if parse_image(incoming["bytes"]):
+                        store.ingest_image(session, incoming["bytes"])
+                elif incoming.get("text") is not None:
+                    try:
+                        message = json.loads(incoming["text"])
+                    except ValueError:
+                        pass
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
@@ -412,8 +456,11 @@ def register(app: FastAPI, settings: Settings) -> LiveStore:
         async def relay() -> None:
             try:
                 while True:
-                    kind, text = await watcher.get()
-                    await websocket.send_text(text)
+                    kind, payload = await watcher.get()
+                    if isinstance(payload, bytes):
+                        await websocket.send_bytes(payload)
+                    else:
+                        await websocket.send_text(payload)
                     if kind == "bye":
                         await websocket.close()
                         return

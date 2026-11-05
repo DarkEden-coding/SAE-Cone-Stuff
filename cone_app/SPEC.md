@@ -268,6 +268,28 @@ Every message has `"type"` and `"t"` (seconds since the live session started, ph
   (`class_names`, `cone_dims` of `cone-result/1`).
 - `/watch` also accepts a session that is no longer active and sends its cached state; use `GET .../log` to replay it.
 
+### Camera preview images (binary messages)
+
+So a laptop can see roughly what the phone sees, the phone may also send a low-rate preview: about 15 fps,
+JPEG (quality ~0.5) of the **inference image** downscaled to 480 px on the long side (e.g. 480×270 or
+270×480), typically 10–25 KB each. Each image is one **binary** WebSocket message:
+
+```
+<UTF-8 JSON header>\n<JPEG bytes>
+{"type": "image", "t": 3.52, "size": [480, 270], "image_size": [1280, 720]}
+```
+
+- The header ends at the first `\n` (0x0A) byte; everything after it is the JPEG.
+- `size` is the JPEG's pixel size, and `image_size` is the inference image size that `frame` detections refer
+  to. A viewer scales overlays by `size / image_size` (same aspect ratio, same orientation).
+- `t` uses the same clock as `frame.t`. The viewer draws the latest image and the latest frame's overlays;
+  they need not be the same instant.
+- Images are **live only**: the server relays them to watchers but does not write them to `stream.jsonl`
+  or the session logs, and keeps only the latest image in memory (sent to a watcher when it connects).
+  Images are the first thing to drop under congestion: the phone keeps at most one unsent image (latest
+  wins), and the server keeps at most one pending image per watcher.
+- The phone's on-device `live.jsonl` log does not contain images either (the recorded video replaces them).
+
 ### Server endpoints (live)
 
 Auth as for the other `/api/*` endpoints. WebSockets cannot set headers from browsers, so all live
@@ -279,7 +301,7 @@ WebSocket endpoints and `GET .../log` also accept `?token=`.
 | GET | `/api/live/sessions` | `[LiveSession]` newest first |
 | GET | `/api/live/sessions/{id}` | `LiveSession` |
 | GET | `/api/live/sessions/{id}/log` | `application/x-ndjson`, every stored message in order. `?recording_id=` returns the uploaded log of that recording if present, else the slice of the stream between its `recording` start/stop messages (plus the last `hello` and `map` before the start). |
-| WS | `/api/live/sessions/{id}/watch` | Browser ← server. On connect the server sends the latest `hello`, latest `map` and latest `frame` (if any), then relays every new message as it arrives. Ends with `bye` or when the phone disconnects (the server then sends `{"type":"disconnected","t":...}`; it may reconnect). |
+| WS | `/api/live/sessions/{id}/watch` | Browser ← server. On connect the server sends the latest `hello`, latest `map`, latest `frame` and latest image (if any), then relays every new message as it arrives (text messages as text, images as binary). Ends with `bye` or when the phone disconnects (the server then sends `{"type":"disconnected","t":...}`; it may reconnect). |
 | DELETE | `/api/live/sessions/{id}` | 204 |
 
 `LiveSession`:

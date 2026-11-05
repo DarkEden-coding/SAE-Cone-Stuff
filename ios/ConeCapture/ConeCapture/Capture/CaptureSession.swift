@@ -197,7 +197,7 @@ final class CaptureSession: ObservableObject {
         guard livePipeline == nil, !liveStarting, let settings else { return }
         liveStarting = true
         let config = LivePipeline.Config(rotation: level.captureRotation, conf: settings.liveConfidence,
-                                         keypointCorrection: settings.liveKeypointCorrection, stream: settings.liveStream,
+                                         keypointCorrection: settings.liveKeypointCorrection, stream: settings.liveStream, cameraPreview: settings.liveCameraPreview,
                                          baseURL: settings.normalizedBase, token: settings.trimmedToken, name: settings.trimmedName)
         let gravity = level.history
         Task { [weak self] in

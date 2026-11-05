@@ -57,6 +57,7 @@ final class AppSettings: ObservableObject {
         static let liveStream = "liveStream"
         static let liveConfidence = "liveConfidence"
         static let liveKeypointCorrection = "liveKeypointCorrection"
+        static let liveCameraPreview = "liveCameraPreview"
     }
     private static let tokenAccount = "bearerToken"
 
@@ -76,6 +77,8 @@ final class AppSettings: ObservableObject {
     @Published var liveConfidence: Double { didSet { UserDefaults.standard.set(liveConfidence, forKey: Key.liveConfidence) } }
     /// Live mode: refine cone keypoints before triangulating.
     @Published var liveKeypointCorrection: Bool { didSet { UserDefaults.standard.set(liveKeypointCorrection, forKey: Key.liveKeypointCorrection) } }
+    /// Live mode: also stream a small 15 fps camera preview (480 px JPEG, ~2-3 Mbit/s) to the viewer.
+    @Published var liveCameraPreview: Bool { didSet { UserDefaults.standard.set(liveCameraPreview, forKey: Key.liveCameraPreview) } }
 
     init() {
         let d = UserDefaults.standard
@@ -90,6 +93,7 @@ final class AppSettings: ObservableObject {
         liveStream = d.object(forKey: Key.liveStream) as? Bool ?? true
         liveConfidence = d.object(forKey: Key.liveConfidence) as? Double ?? 0.25
         liveKeypointCorrection = d.object(forKey: Key.liveKeypointCorrection) as? Bool ?? true
+        liveCameraPreview = d.object(forKey: Key.liveCameraPreview) as? Bool ?? true
 
         if VideoFormats.format(forID: formatID) == nil, let def = VideoFormats.defaultFormat {
             formatID = VideoFormats.id(def)

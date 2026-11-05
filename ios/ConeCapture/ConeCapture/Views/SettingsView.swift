@@ -60,6 +60,8 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Stream to server", isOn: $settings.liveStream)
+                Toggle("Camera preview (15 fps, 480 px)", isOn: $settings.liveCameraPreview)
+                    .disabled(!settings.liveStream)
                 Toggle("Keypoint correction", isOn: $settings.liveKeypointCorrection)
                 VStack(alignment: .leading) {
                     Text("Confidence threshold: \(settings.liveConfidence, format: .number.precision(.fractionLength(2)))")

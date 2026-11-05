@@ -76,3 +76,27 @@ final class LiveWireFormatTests: XCTestCase {
         XCTAssertEqual((json["stats"] as? [String: Double])?["det_ms"], 10)
     }
 }
+
+final class LivePreviewEncoderTests: XCTestCase {
+    func testEncodesRotatedHeaderAndJPEG() throws {
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, 1920, 1080, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary, &buffer)
+        let encoder = LivePreviewEncoder(rotation: .clockwise90, imageSize: PixelSize(width: 720, height: 1280))
+        let done = expectation(description: "image")
+        var message = Data()
+        encoder.onImage = { message = $0; done.fulfill() }
+        encoder.offer(try XCTUnwrap(buffer), t: 1.0)
+        encoder.offer(buffer!, t: 1.01)          // within 1/15 s: dropped
+        wait(for: [done], timeout: 5)
+        let split = try XCTUnwrap(message.firstIndex(of: 0x0A))
+        let header = try XCTUnwrap(JSONSerialization.jsonObject(with: message[..<split]) as? [String: Any])
+        XCTAssertEqual(header["type"] as? String, "image")
+        XCTAssertEqual(header["size"] as? [Int], [270, 480])
+        XCTAssertEqual(header["image_size"] as? [Int], [720, 1280])
+        let jpeg = message[(split + 1)...]
+        XCTAssertEqual(Array(jpeg.prefix(2)), [0xFF, 0xD8])
+        let image = try XCTUnwrap(UIImage(data: Data(jpeg)))
+        XCTAssertEqual(image.size, CGSize(width: 270, height: 480))
+    }
+}

@@ -4,6 +4,7 @@ import { el, toast, fmtNum, fmtTime, fmtAgo, classColor, STATUS_COLORS } from '.
 import { Overlay } from './overlay.js';
 import { Viewer } from './viewer3d.js';
 import { LiveScene, adaptFrame } from './live_scene.js';
+import { Preview } from './live_preview.js';
 
 const TAIL = 400;
 const SPEEDS = [0.5, 1, 2];
@@ -36,17 +37,19 @@ export function mountLiveView(root, id) {
   // status strip
   const chips = {};
   const strip = el('div', { class: 'lv-status card' });
-  for (const [k, label] of [['conn', 'Connection'], ['status', 'Frame'], ['fps', 'fps'], ['det', 'det ms'], ['slam', 'slam ms'], ['inl', 'inliers'], ['cones', 'Cones'], ['rec', 'Recording']]) {
+  for (const [k, label] of [['conn', 'Connection'], ['status', 'Frame'], ['fps', 'fps'], ['det', 'det ms'], ['slam', 'slam ms'], ['inl', 'inliers'], ['cones', 'Cones'], ['rec', 'Recording'], ['cam', 'Camera']]) {
     const v = el('b', { class: 'mono' }, '-');
     chips[k] = v;
     strip.append(el('div', { class: 'lv-chip' }, el('span', { class: 'muted small' }, label), v));
   }
 
-  // camera view (no video is streamed: black canvas + overlays, or the recording's video in replay)
+  // camera view (live: low-rate preview images under the overlays; replay: the recording's video, else black)
   const canvas = el('canvas', { class: 'overlay' });
+  const previewCanvas = el('canvas', { class: 'preview' });
+  const preview = new Preview(previewCanvas);
   const stage = el('div', { class: 'stage', style: { '--ar': '1280 / 720' } });
   const noMedia = el('div', { class: 'nomedia' }, 'no video is streamed: overlay on black');
-  stage.append(noMedia, canvas);
+  stage.append(previewCanvas, noMedia, canvas);
   const overlay = new Overlay(stage, canvas, [1280, 720]);
   cleanups.push(() => overlay.destroy());
   const toggles = el('div', { class: 'toggles' }, ...[['boxes', 'Boxes'], ['keypoints', 'Keypoints'], ['labels', 'Labels'], ['ids', 'Landmark ids']].map(([k, label]) => {
@@ -154,7 +157,7 @@ export function mountLiveView(root, id) {
 
   // ---------------------------------------------------------------- live
   let ws = null, retry = null, backoff = 1000, ended = false, phone = 'waiting';
-  let liveMap = null, liveTail = [], latest = null, flushRaf = 0, sessionTimer = null;
+  let liveMap = null, liveTail = [], latest = null, flushRaf = 0, sessionTimer = null, camTimer = 0;
 
   function connLabel() {
     if (ended) return setConnText('ended', 'warn');
@@ -170,7 +173,9 @@ export function mountLiveView(root, id) {
     if (dead || mode !== 'live') { sock.close(); return; }
     ws = sock;
     sock.onopen = () => { backoff = 1000; connLabel(); };
+    sock.binaryType = 'arraybuffer';
     sock.onmessage = (ev) => {
+      if (typeof ev.data !== 'string') { preview.push(ev.data); return; }
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       onLiveMsg(m);
     };
@@ -212,6 +217,7 @@ export function mountLiveView(root, id) {
   }
   function stopLive() {
     clearTimeout(retry); retry = null; clearTimeout(sessionTimer); cancelAnimationFrame(flushRaf); flushRaf = 0;
+    clearInterval(camTimer); camTimer = 0; preview.reset(); chips.cam.textContent = '-';
     if (ws) { const s = ws; ws = null; s.close(); }
   }
   function startLive() {
@@ -219,8 +225,11 @@ export function mountLiveView(root, id) {
     mode = 'live'; ended = false; phone = 'waiting'; backoff = 1000;
     liveMap = null; liveTail = []; latest = null; scene.reset();
     overlay.set(null); setStatusChips(null, 0);
-    setNoMedia(null);
+    setNoMedia(null); noMedia.hidden = true; // live shows the preview images instead
     setModeUI();
+    preview.reset();
+    clearInterval(camTimer);
+    camTimer = setInterval(() => { chips.cam.textContent = preview.status(); }, 500);
     connect();
     clearTimeout(sessionTimer);
     const poll = async () => { await refreshSession(); if (!dead && mode === 'live') sessionTimer = setTimeout(poll, 4000); };

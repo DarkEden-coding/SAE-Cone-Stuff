@@ -127,6 +127,58 @@ class LiveTests(unittest.TestCase):
                 self.assertEqual([watcher.receive_json()["type"] for _ in range(3)], ["hello", "map", "frame"])
             self.assertFalse(client.get(f"/api/live/sessions/{SID}").json()["active"])
 
+    @staticmethod
+    def image(t: float, payload: bytes = b"\xff\xd8jpeg\xff\xd9") -> bytes:
+        header = {"type": "image", "t": t, "size": [480, 270], "image_size": [1280, 720]}
+        return json.dumps(header).encode() + b"\n" + payload
+
+    @staticmethod
+    def receive_pair(watcher) -> tuple[str, bytes]:
+        """One text message and one binary one, in whichever order the relay delivers them."""
+        got = [watcher.receive(), watcher.receive()]
+        texts = [m["text"] for m in got if m.get("text") is not None]
+        blobs = [m["bytes"] for m in got if m.get("bytes") is not None]
+        assert len(texts) == len(blobs) == 1, got
+        return json.loads(texts[0])["type"], blobs[0]
+
+    def test_images_relayed_cached_and_not_logged(self):
+        first, second = self.image(.1), self.image(.2, b"\xff\xd8other")
+        with self.client() as client:
+            with client.websocket_connect("/api/live/ingest") as phone:
+                phone.send_json(hello())
+                wait_for(lambda: client.get(f"/api/live/sessions/{SID}").json()["active"])
+                with client.websocket_connect(f"/api/live/sessions/{SID}/watch") as watcher:
+                    self.assertEqual(watcher.receive_json()["type"], "hello")
+                    phone.send_bytes(first)
+                    self.assertEqual(watcher.receive_bytes(), first)
+                    phone.send_bytes(second)
+                    phone.send_json(frame(0, .3))
+                    self.assertEqual(self.receive_pair(watcher), ("frame", second))
+                # A late watcher gets hello, frame, then the latest image only.
+                with client.websocket_connect(f"/api/live/sessions/{SID}/watch") as late:
+                    self.assertEqual([late.receive_json()["type"] for _ in range(2)], ["hello", "frame"])
+                    self.assertEqual(late.receive_bytes(), second)
+                session = client.get(f"/api/live/sessions/{SID}").json()
+                self.assertEqual((session["n_frames"], session["duration_s"]), (1, .3))
+                self.assertEqual([m["type"] for m in self.log(client)], ["hello", "frame"])
+                self.assertNotIn(b"jpeg", (self.settings.data_dir / "live" / SID / "stream.jsonl").read_bytes())
+
+    def test_malformed_images_are_ignored(self):
+        bad = [b"no newline", b'{"type":"image"}\n', b"not json\npayload", b'{"type":"frame"}\npayload',
+               b'["image"]\npayload', self.image(0, b"x" * (512 * 1024))]
+        with self.client() as client:
+            with client.websocket_connect("/api/live/ingest") as phone:
+                phone.send_json(hello())
+                with client.websocket_connect(f"/api/live/sessions/{SID}/watch") as watcher:
+                    self.assertEqual(watcher.receive_json()["type"], "hello")
+                    for data in bad:
+                        phone.send_bytes(data)
+                    good = self.image(.5)
+                    phone.send_bytes(good)
+                    phone.send_json(frame(0, .6))
+                    self.assertEqual(self.receive_pair(watcher), ("frame", good))  # only the valid image arrives
+                self.assertEqual(client.get(f"/api/live/sessions/{SID}").json()["n_frames"], 1)
+
     def test_live_watcher_sees_disconnected_and_bye_closes(self):
         with self.client() as client:
             with client.websocket_connect("/api/live/ingest") as phone:

@@ -4,9 +4,11 @@ SwiftUI + ARKit app for iPhone 14 Pro (iOS 17+) that records photos/videos toget
 camera intrinsics** and uploads them to the cone-pose server (`cone_app/SPEC.md`, schema `cone-capture/1`,
 `POST /api/captures`). No third-party dependencies.
 
-**Hard rule:** ARKit supplies only the camera image and `camera.intrinsics`. The app never reads or sends
-`camera.transform`, euler angles, view/projection matrices, anchors or any tracking pose. CoreMotion gravity
-drives the level indicator and capture orientation; gravity readings are never uploaded.
+**Hard rule:** ARKit supplies only the camera image and `camera.intrinsics` (plus, in Live mode, the 2D
+`displayTransform` used to draw overlays on the preview). The app never reads or sends `camera.transform`,
+euler angles, view/projection matrices, anchors or any tracking pose. CoreMotion gravity drives the level
+indicator and capture orientation, and in Live mode it is the SLAM's tilt prior; raw gravity readings are
+never uploaded.
 
 Built and signed with Xcode 27 on macOS. The manifest and intrinsics unit tests pass on an iPhone 14 Pro.
 Remaining device-specific assumptions are marked `// VERIFY:` in the source.
@@ -60,6 +62,40 @@ written to be Swift-6-friendly but not strict-checked.
    `{base}/#/job/<id>`) / failed (Retry). Local files live in `Documents/Recordings/<timestamp>/`
    (`video.mp4`|`photo.jpg`, `capture.json`, `meta.json`). Uploads use a background URLSession; the multipart
    body is first written to `Caches/Uploads` (needs free space equal to the video size).
+
+## Live mode
+
+The **Live** mode runs everything on the phone at about 10–15 fps:
+
+1. **Detection:** the YOLO26n pose model as CoreML (`ConeCapture/Resources/ConePose1280x736.mlpackage` and
+   `ConePose736x1280.mlpackage`). The camera frame is rotated to the gravity-upright quarter turn chosen when
+   Live mode starts, scaled to 1280×720 (or 720×1280), letterboxed to the model input, and decoded with
+   class-aware NMS in Swift (`ConeDetector.swift`).
+2. **Keypoint correction:** the box-height bias table from the server (`Resources/kp_correction.json`). It was
+   fitted for the 1920 px server model; it is looked up by box height in inference pixels, which is only an
+   approximation at 1280 px. Refit it on the synthetic set at 1280 for accurate ranges (setting: *Keypoint
+   correction*).
+3. **Per-cone position and live SLAM:** the `ConeSLAM` Swift package (`ConeSLAM/`, pure Swift, no
+   dependencies). It ports the online half of `cone_app/slam.py`: pixel-space Hungarian association, robust
+   pose refinement, relocalisation, landmark fusion, keyframes, windowed and periodic global bundle adjustment
+   with the camera blocks eliminated, and duplicate merging. With gravity known, each cone's position is a
+   3-parameter fit of the silhouette model instead of planar PnP. Gravity (CoreMotion, 100 Hz, interpolated
+   to the frame timestamp) is a soft tilt prior (σ 0.015 rad); heading and position come only from cones. The
+   server's offline passes (re-localising every frame against the final map, gap filling) are not run live.
+4. **Streaming:** frame, map, recording and session messages (`cone-live/1`, `cone_app/SPEC.md`) go over a
+   WebSocket to `{server}/api/live/ingest`. Only metadata is sent, never images. Open **Live** in the web UI
+   to watch or replay a session.
+
+On screen: boxes, keypoints and ranges over the preview, a heading-up minimap of the cone map (double-tap
+it to reset the map), and a HUD line with tracking status, fps and timings. The shutter records video as in
+Video mode; the recording also gets `live.jsonl`, the phone's own log of the live messages, which is
+uploaded with the video so the web replay can sync the live results to the video.
+
+Tests: `cd ConeSLAM && swift test -c release` runs the SLAM on the same simulated drives as
+`cone_app/tests/test_slam.py` (fixtures from `ConeSLAM/Tests/make_fixtures.py`), checks projection parity with
+the Python geometry and the CoreML output decoding against ultralytics. `ConeCaptureTests` checks the
+orientation/gravity conversions and runs the CoreML detector on a real cone image in the simulator.
+To re-export the models after retraining: `sh ios/ConeCapture/scripts/export_model.sh [weights.pt]`.
 
 ## Field-recording checklist
 

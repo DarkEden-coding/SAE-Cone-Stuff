@@ -26,12 +26,17 @@ final class FrameSink: NSObject, ARSessionDelegate {
 
     private let lock = NSLock()
     private var recorder: VideoRecorder?
+    private var live: LivePipeline?
     private var lastTimestamp: TimeInterval = 0
     private var smoothedFPS: Double = 0
     private var lastHUD: TimeInterval = 0
 
     func attach(_ recorder: VideoRecorder?) {
         lock.lock(); self.recorder = recorder; lock.unlock()
+    }
+
+    func attachLive(_ pipeline: LivePipeline?) {
+        lock.lock(); live = pipeline; lock.unlock()
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -42,8 +47,9 @@ final class FrameSink: NSObject, ARSessionDelegate {
         }
         lastTimestamp = ts
 
-        lock.lock(); let rec = recorder; lock.unlock()
+        lock.lock(); let rec = recorder; let pipeline = live; lock.unlock()
         rec?.append(frame: frame)
+        pipeline?.handle(frame)
 
         if ts - lastHUD >= 0.25 {
             lastHUD = ts
@@ -71,12 +77,22 @@ final class CaptureSession: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case photo = "Photo"
         case video = "Video"
+        case live = "Live"
         var id: String { rawValue }
     }
 
     @Published var mode: Mode = .video {
-        didSet { if oldValue != mode, !isRecording { applyConfiguration() } }
+        didSet {
+            guard oldValue != mode, !isRecording else { return }
+            applyConfiguration()
+            mode == .live ? startLive() : stopLive()
+        }
     }
+    /// Latest processed live frame (Live mode only).
+    @Published private(set) var live: LiveDisplay?
+    @Published private(set) var liveStarting = false
+    private(set) var livePipeline: LivePipeline?
+    private var viewport: (CGSize, UIInterfaceOrientation) = (.zero, .portrait)
     @Published private(set) var hud: FrameSink.Snapshot?
     @Published private(set) var isRecording = false
     @Published private(set) var isBusy = false          // photo capture or video finalising
@@ -100,6 +116,7 @@ final class CaptureSession: ObservableObject {
         var createdAt: Date
         var recorder: VideoRecorder
         var name: String?
+        var liveSessionID: String?
     }
     private var pendingVideo: PendingVideo?
 
@@ -156,8 +173,58 @@ final class CaptureSession: ObservableObject {
         arSession.run(cfg, options: [.resetTracking, .removeExistingAnchors])
     }
 
-    func start() { applyConfiguration() }
-    func pause() { arSession.pause() }
+    func start() {
+        applyConfiguration()
+        if mode == .live { startLive() }
+    }
+
+    func pause() {
+        stopLive()
+        arSession.pause()
+    }
+
+    // MARK: Live
+
+    func setViewport(_ size: CGSize, orientation: UIInterfaceOrientation) {
+        viewport = (size, orientation)
+        livePipeline?.setViewport(size, orientation: orientation)
+    }
+
+    func resetLiveMap() { livePipeline?.resetMap() }
+
+    /// Loads the CoreML model off the main thread, then attaches the pipeline to the frame stream.
+    private func startLive() {
+        guard livePipeline == nil, !liveStarting, let settings else { return }
+        liveStarting = true
+        let config = LivePipeline.Config(rotation: level.captureRotation, conf: settings.liveConfidence,
+                                         keypointCorrection: settings.liveKeypointCorrection, stream: settings.liveStream,
+                                         baseURL: settings.normalizedBase, token: settings.trimmedToken, name: settings.trimmedName)
+        let gravity = level.history
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try LivePipeline(config: config, gravity: gravity) }
+            }.value
+            guard let self else { return }
+            self.liveStarting = false
+            switch result {
+            case .success(let pipeline):
+                guard self.mode == .live else { pipeline.stop(); return }
+                pipeline.onDisplay = { [weak self] display in self?.live = display }
+                pipeline.setViewport(self.viewport.0, orientation: self.viewport.1)
+                self.livePipeline = pipeline
+                self.sink.attachLive(pipeline)
+            case .failure(let error):
+                self.errorMessage = "Live mode failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func stopLive() {
+        sink.attachLive(nil)
+        livePipeline?.stop()
+        livePipeline = nil
+        live = nil
+    }
 
     // MARK: Video
 
@@ -166,13 +233,16 @@ final class CaptureSession: ObservableObject {
     }
 
     private func startRecording() {
-        guard mode == .video, !isRecording, !isBusy, let store, let settings else { return }
+        guard mode == .video || mode == .live, !isRecording, !isBusy, let store, let settings else { return }
+        if mode == .live && livePipeline == nil { return }
         do {
             let (id, folder) = try store.makeFolder()
-            let recorder = VideoRecorder(outputURL: folder.appendingPathComponent("video.mp4"),
-                                         rotation: level.captureRotation)
-            pendingVideo = PendingVideo(id: id, folder: folder, createdAt: Date(),
-                                        recorder: recorder, name: settings.trimmedName)
+            // Live recordings keep the live session's orientation so the log overlays the video.
+            let rotation = mode == .live ? livePipeline!.rotation : level.captureRotation
+            let recorder = VideoRecorder(outputURL: folder.appendingPathComponent("video.mp4"), rotation: rotation)
+            pendingVideo = PendingVideo(id: id, folder: folder, createdAt: Date(), recorder: recorder,
+                                        name: settings.trimmedName, liveSessionID: mode == .live ? livePipeline?.sessionID : nil)
+            livePipeline?.startRecording(id: id, folder: folder, name: settings.trimmedName, recorder: recorder)
             sink.attach(recorder)
             isRecording = true
         } catch {
@@ -190,8 +260,16 @@ final class CaptureSession: ObservableObject {
         isBusy = true
         sink.attach(nil)
         pendingVideo = nil
-        p.recorder.finish { [weak self] result in
-            Task { @MainActor in self?.finishVideo(result, pending: p) }
+        let finish = { [weak self] in
+            p.recorder.finish { result in
+                Task { @MainActor in self?.finishVideo(result, pending: p) }
+            }
+        }
+        // The live log must be closed before the recording is committed (and maybe uploaded).
+        if p.liveSessionID != nil, let pipeline = livePipeline {
+            pipeline.stopRecording(completion: finish)
+        } else {
+            finish()
         }
     }
 
@@ -203,7 +281,8 @@ final class CaptureSession: ObservableObject {
                                            imageSize: out.imageSize, frames: out.frames,
                                            name: p.name, notes: nil)
             do {
-                try commit(id: p.id, folder: p.folder, mediaName: "video.mp4", manifest: manifest)
+                try commit(id: p.id, folder: p.folder, mediaName: "video.mp4", manifest: manifest,
+                           liveSessionID: p.liveSessionID)
                 toast = "Saved \(out.frames.count) frames (\(out.droppedFrames) dropped)"
             } catch {
                 errorMessage = "Could not save capture.json: \(error.localizedDescription)"
@@ -242,14 +321,16 @@ final class CaptureSession: ObservableObject {
 
     // MARK: Commit
 
-    private func commit(id: String, folder: URL, mediaName: String, manifest: CaptureManifest) throws {
+    private func commit(id: String, folder: URL, mediaName: String, manifest: CaptureManifest,
+                        liveSessionID: String? = nil) throws {
         guard let store, let settings else { return }
         try manifest.jsonData().write(to: folder.appendingPathComponent("capture.json"), options: .atomic)
         let attrs = try? FileManager.default.attributesOfItem(atPath: folder.appendingPathComponent(mediaName).path)
         let bytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         store.add(Recording(id: id, kind: manifest.kind, createdAt: manifest.createdAt, name: manifest.name,
                             mediaFileName: mediaName, mediaBytes: bytes, status: .pending,
-                            jobID: nil, errorMessage: nil, attempts: 0, mediaDeleted: false))
+                            jobID: nil, errorMessage: nil, attempts: 0, mediaDeleted: false,
+                            liveSessionID: liveSessionID))
         if settings.autoUpload { uploader?.upload(id) }
     }
 }

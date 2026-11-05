@@ -204,3 +204,100 @@ def run_slam(frames: list[dict], options: dict, progress=None) -> dict
     #          "landmarks": [...], "ground_plane": dict|None, "stats": {...}}
 ```
 The pipeline (backend) turns these into the result JSON (ndarray → lists).
+
+## Live mode, schema `cone-live/1`
+
+The iPhone app has a **Live** mode. It runs cone detection (CoreML, YOLO26n-pose at 1280×736 or
+736×1280), keypoint correction, per-cone PnP and a reduced cone-only SLAM **on the phone**. The phone
+streams the results (metadata only, never images) to the server, which stores them and relays them to
+browsers that watch. The rule against ARKit camera pose still holds. The one exception to "no gravity":
+the live SLAM uses CoreMotion gravity (unit vector, camera frame) as a soft roll/pitch prior; heading
+and position come only from cones. Raw gravity readings are not streamed.
+
+Live geometry uses the **inference image**: the ARKit frame rotated to the gravity-upright quarter turn
+chosen when Live mode starts (same rule as video, see `MediaRotation`), then scaled to 1280 (landscape)
+or 720 (portrait) px wide and letterboxed to the model input. `K` and `image_size` in live messages
+describe the scaled, rotated image **before** letterboxing (e.g. 1280×720 or 720×1280). Coordinate
+conventions are the same as above (camera OpenCV, world z-up, `T_world_cam` maps camera to world).
+
+### Messages (JSON objects, one per WebSocket text message or JSONL line)
+
+Every message has `"type"` and `"t"` (seconds since the live session started, phone clock).
+
+```json
+{"type": "hello", "schema": "cone-live/1", "session_id": "<uuid>", "t": 0.0,
+ "started_at": "2026-11-05T12:00:00Z", "name": "optional label",
+ "device": {"model": "iPhone15,2", "system": "iOS 26.0", "app_version": "1.0"},
+ "image_size": [1280, 720], "K": [[fx,0,cx],[0,fy,cy],[0,0,1]],
+ "model": {"name": "conepose-1280", "imgsz": [736, 1280]},
+ "options": {"conf": 0.25, "kp_conf": 0.5, "kp_correction": true, "flat_ground": true, "gravity_prior": true}}
+
+{"type": "frame", "i": 42, "t": 3.51, "status": "waiting"|"init"|"tracked"|"lost",
+ "T_world_cam": [[...4x4...]] | null,
+ "K": [[...]], "image_size": [1280, 720],
+ "detections": [{"class_id": 4, "conf": 0.91, "box_xyxy": [x1,y1,x2,y2],
+                 "keypoints": [[x,y,c], ...8 entries, corrected],
+                 "p_cam": [x,y,z] | null, "landmark_id": 7 | null}],
+ "n_inliers": 6,
+ "rec": {"recording_id": "20261105-120000", "t": 1.23} | null,
+ "stats": {"det_ms": 18.0, "slam_ms": 6.0, "fps": 12.5}}
+
+{"type": "map", "t": 3.6, "landmarks": [{"id": 7, "class_id": 4, "p_world": [x,y,z],
+ "sigma_m": [sx,sy,sz], "n_obs": 12, "confirmed": true}],
+ "keyframes": [{"i": 40, "t": 3.4, "T_world_cam": [[...]]}]}
+
+{"type": "recording", "t": 5.0, "event": "start"|"stop", "recording_id": "20261105-120000", "name": "..."}
+
+{"type": "bye", "t": 60.2}
+```
+
+- `frame.i` is a counter of processed live frames (not video frames). Frames are sent at the processing
+  rate (target 10–15 Hz). `status: "waiting"` means the map is not initialised yet.
+- `frame.rec` is set while recording video: `rec.t` is the time of this frame on the MP4 timeline
+  (same clock as `capture.json` frames `t`), so replay can sync the log to `<video>.currentTime`.
+- `map` is a **full snapshot** of the current map (not a delta). It is sent at most twice per second
+  and after every bundle adjustment. `keyframes` holds the BA-corrected keyframe poses (all keyframes,
+  for redrawing the trajectory). A later `map` replaces earlier ones.
+- `T_world_cam` in `frame` is the pose when the frame was processed; later BA corrections appear only
+  in `map.keyframes`.
+- Clients must ignore unknown message types and unknown fields.
+- `T_world_cam` is `null` while `status` is `waiting` or `lost`; `K` and `image_size` are always present.
+- `t` comes from one phone clock per session, so it stays monotonic across reconnects. Replay sorts by `t`;
+  a recording's frames are those whose `rec.recording_id` matches, ordered by `rec.t`.
+- Class names and cone sizes are not repeated in live messages: use the class ids and dimensions above
+  (`class_names`, `cone_dims` of `cone-result/1`).
+- `/watch` also accepts a session that is no longer active and sends its cached state; use `GET .../log` to replay it.
+
+### Server endpoints (live)
+
+Auth as for the other `/api/*` endpoints. WebSockets cannot set headers from browsers, so all live
+WebSocket endpoints and `GET .../log` also accept `?token=`.
+
+| Method | Path | Notes |
+|---|---|---|
+| WS | `/api/live/ingest` | Phone → server. First message must be `hello`. A reconnect sends `hello` again with the same `session_id`; the server appends to the same session. Every message is appended to `stream.jsonl` and relayed to watchers. The server sends nothing back except `{"type":"ack","t":...}` every ~2 s (optional for the phone to read). |
+| GET | `/api/live/sessions` | `[LiveSession]` newest first |
+| GET | `/api/live/sessions/{id}` | `LiveSession` |
+| GET | `/api/live/sessions/{id}/log` | `application/x-ndjson`, every stored message in order. `?recording_id=` returns the uploaded log of that recording if present, else the slice of the stream between its `recording` start/stop messages (plus the last `hello` and `map` before the start). |
+| WS | `/api/live/sessions/{id}/watch` | Browser ← server. On connect the server sends the latest `hello`, latest `map` and latest `frame` (if any), then relays every new message as it arrives. Ends with `bye` or when the phone disconnects (the server then sends `{"type":"disconnected","t":...}`; it may reconnect). |
+| DELETE | `/api/live/sessions/{id}` | 204 |
+
+`LiveSession`:
+```json
+{"id": "<uuid>", "name": "...", "device": {...}, "started_at": iso, "updated_at": iso,
+ "active": true, "duration_s": 60.2, "n_frames": 700, "n_landmarks": 40,
+ "recordings": [{"recording_id": "...", "name": "...", "t_start": 5.0, "t_end": 30.0,
+                 "job_id": "..." | null, "has_log": true}]}
+```
+`active` = a phone is connected to `/ingest` for this session now. Stored under
+`cone_app_data/live/<id>/`: `session.json`, `stream.jsonl`, `recordings/<recording_id>.jsonl`.
+
+### Recording upload with a live log
+
+`POST /api/captures` additionally accepts the multipart fields `live_session_id` (string),
+`recording_id` (string) and the file `live_log` (JSONL, the phone's own log of the messages produced
+while recording; it starts with `hello` and a `map`). The server stores the file as
+`live/<live_session_id>/recordings/<recording_id>.jsonl` (creating the session directory and a minimal
+`session.json` from its `hello` if the session was never streamed), links the created `job_id` to that
+recording in `session.json`, and otherwise processes the capture as usual. Replay prefers the uploaded
+log over the server's stream slice, because the stream may have gaps from network drops.

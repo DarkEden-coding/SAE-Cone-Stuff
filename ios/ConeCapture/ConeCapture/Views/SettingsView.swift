@@ -58,6 +58,19 @@ struct SettingsView: View {
                 Toggle("Delete media after confirmed upload", isOn: $settings.deleteAfterUpload)
             }
 
+            Section {
+                Toggle("Stream to server", isOn: $settings.liveStream)
+                Toggle("Keypoint correction", isOn: $settings.liveKeypointCorrection)
+                VStack(alignment: .leading) {
+                    Text("Confidence threshold: \(settings.liveConfidence, format: .number.precision(.fractionLength(2)))")
+                    Slider(value: $settings.liveConfidence, in: 0.05...0.9, step: 0.05)
+                }
+            } header: {
+                Text("Live mode")
+            } footer: {
+                Text("Live mode detects cones on the phone and builds a map; streaming sends the results to the server for the live viewer. Confidence and correction apply from the next live session.")
+            }
+
             Section("About") {
                 LabeledContent("Version",
                                value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")

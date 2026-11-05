@@ -21,6 +21,16 @@ function authHeaders() {
 }
 
 async function mockGet(path) {
+  if (path.startsWith('/api/live/')) {
+    const m = await import('./live_mock.js');
+    const [p, query] = path.split('?');
+    const lm = p.match(/^\/api\/live\/sessions(?:\/([^/]+)(\/log)?)?$/);
+    if (!lm) throw new Error('404 ' + path);
+    if (!lm[1]) return m.mockSessions();
+    const s = m.mockSessions().find((x) => x.id === lm[1]);
+    if (!s) throw new Error('404 session not found');
+    return lm[2] ? m.mockLog(new URLSearchParams(query).get('recording_id')) : s;
+  }
   const load = async (f) => (await fetch(BASE + 'dev/' + f)).json();
   if (path === '/api/health') return { ok: true, model: 'mock', imgsz: 1920, device: 'mock', version: 'mock', auth: false };
   if (path === '/api/jobs') return load('mock_jobs.json');
@@ -41,7 +51,7 @@ async function mockGet(path) {
   throw new Error('404 ' + path);
 }
 
-export async function api(path, { method = 'GET', json, retry = true } = {}) {
+export async function api(path, { method = 'GET', json, retry = true, text = false } = {}) {
   if (MOCK) {
     if (method !== 'GET') throw new Error('Not available in mock mode');
     return mockGet(path);
@@ -50,7 +60,7 @@ export async function api(path, { method = 'GET', json, retry = true } = {}) {
   const init = { method, headers };
   if (json !== undefined) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(json); }
   const r = await fetch(path, init);
-  if (r.status === 401 && retry) { if (askToken(true)) return api(path, { method, json, retry: false }); }
+  if (r.status === 401 && retry) { if (askToken(true)) return api(path, { method, json, retry: false, text }); }
   if (!r.ok) {
     let detail = '';
     try { const j = await r.json(); detail = j.detail ? (typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)) : ''; } catch (e) { /* ignore */ }
@@ -59,7 +69,7 @@ export async function api(path, { method = 'GET', json, retry = true } = {}) {
     throw err;
   }
   if (r.status === 204) return null;
-  return r.json();
+  return text ? r.text() : r.json();
 }
 
 export async function init() {
@@ -92,6 +102,24 @@ export const getResult = (id) => api('/api/jobs/' + encodeURIComponent(id) + '/r
 export const deleteJob = (id) => api('/api/jobs/' + encodeURIComponent(id), { method: 'DELETE' });
 export const rerunJob = (id, options) => api('/api/jobs/' + encodeURIComponent(id) + '/rerun', { method: 'POST', json: options });
 export const listProfiles = () => api('/api/intrinsics-profiles');
+
+// ---- live sessions ----
+export const listLive = () => api('/api/live/sessions');
+export const getLive = (id) => api('/api/live/sessions/' + encodeURIComponent(id));
+export const deleteLive = (id) => api('/api/live/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+// NDJSON text of the stored messages; recordingId selects a recording's log
+export const getLiveLog = (id, recordingId) => api('/api/live/sessions/' + encodeURIComponent(id) + '/log'
+  + (recordingId ? '?recording_id=' + encodeURIComponent(recordingId) : ''), { text: true });
+// browsers cannot set headers on WebSockets, hence ?token=
+export function liveWatchSocket(id) {
+  if (MOCK) return import('./live_mock.js').then((m) => new m.MockSocket());
+  const t = getToken();
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return new WebSocket(`${proto}//${location.host}/api/live/sessions/${encodeURIComponent(id)}/watch` + (t ? '?token=' + encodeURIComponent(t) : ''));
+}
+export function jobMediaUrl(jobId) {
+  return mediaUrl({ media_url: `/api/jobs/${encodeURIComponent(jobId)}/media` });
+}
 
 // multipart upload with progress (XHR); returns Job
 export function uploadJob(form, onProgress) {

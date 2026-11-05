@@ -5,7 +5,7 @@ export const CLASS_COLORS = {
 };
 export const classColor = (name) => CLASS_COLORS[name] || CLASS_COLORS.UNDEFINED;
 
-export const STATUS_COLORS = { tracked: '#4ade80', init: '#60a5fa', lost: '#f87171', single: '#fbbf24', gap: '#6b7280' };
+export const STATUS_COLORS = { tracked: '#4ade80', init: '#60a5fa', lost: '#f87171', single: '#fbbf24', gap: '#6b7280', waiting: '#6b7280' };
 
 export function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);

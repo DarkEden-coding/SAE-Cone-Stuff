@@ -97,6 +97,9 @@ final class Uploader: NSObject, ObservableObject, URLSessionDataDelegate {
         let fileName = rec.mediaFileName
         let mime = rec.kind == .video ? "video/mp4" : "image/jpeg"
         let boundary = "ConeCapture-" + UUID().uuidString
+        let liveLog: MultipartBuilder.LiveLog? = rec.liveSessionID.map {
+            .init(sessionID: $0, recordingID: id, fileURL: store.folderURL(id).appendingPathComponent("live.jsonl"))
+        }
 
         store.update(id) { $0.status = .uploading; $0.errorMessage = nil }
         store.progress[id] = 0
@@ -106,6 +109,7 @@ final class Uploader: NSObject, ObservableObject, URLSessionDataDelegate {
                 let captureJSON = try Data(contentsOf: captureURL)
                 try MultipartBuilder.build(boundary: boundary, captureJSON: captureJSON, mediaURL: mediaURL,
                                            mediaFileName: fileName, mimeType: mime, to: bodyURL)
+                if let liveLog { try MultipartBuilder.appendLiveLog(liveLog, boundary: boundary, to: bodyURL) }
                 var req = URLRequest(url: endpoint)
                 req.httpMethod = "POST"
                 req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
@@ -211,5 +215,34 @@ final class Uploader: NSObject, ObservableObject, URLSessionDataDelegate {
             AppDelegate.backgroundCompletionHandler?()
             AppDelegate.backgroundCompletionHandler = nil
         }
+    }
+}
+
+extension MultipartBuilder {
+    /// Live-mode extras for POST /api/captures: `live_session_id`, `recording_id` and the `live_log` file.
+    struct LiveLog {
+        var sessionID: String
+        var recordingID: String
+        var fileURL: URL
+    }
+
+    /// Appends the live parts to a body written by `build`, replacing its closing delimiter.
+    /// Does nothing if the log file does not exist.
+    static func appendLiveLog(_ live: LiveLog, boundary: String, to body: URL) throws {
+        guard FileManager.default.fileExists(atPath: live.fileURL.path) else { return }
+        let closing = Data("\r\n--\(boundary)--\r\n".utf8)
+        let out = try FileHandle(forUpdating: body)
+        defer { try? out.close() }
+        try out.truncate(atOffset: try out.seekToEnd() - UInt64(closing.count))
+        try out.seekToEnd()
+
+        func field(_ name: String, _ value: String) throws {
+            try out.write(contentsOf: Data("\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)".utf8))
+        }
+        try field("live_session_id", live.sessionID)
+        try field("recording_id", live.recordingID)
+        try out.write(contentsOf: Data("\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"live_log\"; filename=\"live.jsonl\"\r\nContent-Type: application/x-ndjson\r\n\r\n".utf8))
+        try out.write(contentsOf: try Data(contentsOf: live.fileURL, options: .mappedIfSafe))
+        try out.write(contentsOf: closing)
     }
 }

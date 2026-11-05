@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
-from . import __version__
+from . import __version__, live
 from .annotate import render as render_annotated
 from .config import Options, Settings
 from .intrinsics import ProfileStore, inspect_media, validate_capture
@@ -52,6 +52,8 @@ def create_app(settings: Settings | None = None, *, store: JobStore | None = Non
             supplied = authorization[7:] if authorization.startswith("Bearer ") else ""
             if path.startswith("/api/jobs/") and path.rsplit("/", 1)[-1] in ("media", "result", "annotated"):
                 supplied = supplied or request.query_params.get("token", "")
+            if path.startswith("/api/live/sessions/") and path.endswith("/log"):
+                supplied = supplied or request.query_params.get("token", "")
             if not hmac.compare_digest(supplied.encode(), settings.token.encode()):
                 return JSONResponse({"detail": "Bearer token required"}, status_code=401,
                                     headers={"WWW-Authenticate": "Bearer"})
@@ -73,10 +75,17 @@ def create_app(settings: Settings | None = None, *, store: JobStore | None = Non
                 "device": "cuda:0" if torch.cuda.is_available() else "cpu", "version": __version__,
                 "auth": bool(settings.token)}
 
+    app.state.live = live.register(app, settings)
+
+    async def spool(file: UploadFile, destination: Path) -> None:
+        with destination.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                await run_in_threadpool(output.write, chunk)
+
     async def upload(request: Request, source: str) -> JSONResponse:
-        destination = None
+        destination = log_destination = None
         try:
-            async with request.form(max_files=1, max_fields=6, max_part_size=64 * 1024 * 1024) as form:
+            async with request.form(max_files=2, max_fields=8, max_part_size=64 * 1024 * 1024) as form:
                 media_file = form.get("media")
                 if not isinstance(media_file, UploadFile):
                     raise ValueError("A media file is required")
@@ -91,9 +100,17 @@ def create_app(settings: Settings | None = None, *, store: JobStore | None = Non
                 if suffix not in (".jpg", ".jpeg", ".png", ".mp4", ".mov", ".m4v", ".avi", ".webm"):
                     suffix = ".bin"
                 destination = temporary / (uuid4().hex + suffix)
-                with destination.open("wb") as output:
-                    while chunk := await media_file.read(1024 * 1024):
-                        await run_in_threadpool(output.write, chunk)
+                await spool(media_file, destination)
+                live_session, live_recording = form.get("live_session_id"), form.get("recording_id")
+                live_log = form.get("live_log")
+                if live_log is not None or live_session is not None or live_recording is not None:
+                    live_session, live_recording = str(live_session or ""), str(live_recording or "")
+                    if not (live.valid_id(live_session) and live.valid_id(live_recording)):
+                        raise ValueError("live_session_id and recording_id must be valid ids")
+                    if isinstance(live_log, UploadFile):
+                        log_destination = temporary / (uuid4().hex + ".jsonl")
+                        await spool(live_log, log_destination)
+                        await run_in_threadpool(app.state.live.check_log, live_session, log_destination)
                 metadata = await run_in_threadpool(inspect_media, destination)
                 if capture_text:
                     capture = await run_in_threadpool(validate_capture, json.loads(str(capture_text)), metadata)
@@ -102,12 +119,16 @@ def create_app(settings: Settings | None = None, *, store: JobStore | None = Non
                     capture = await run_in_threadpool(app.state.profiles.capture, str(profile_id), metadata)
                 name = str(form.get("name") or capture.get("name") or media_file.filename or "Untitled capture")
                 job = await run_in_threadpool(app.state.jobs.create, destination, capture, metadata, options, name, source)
+                if live_session:
+                    await run_in_threadpool(app.state.live.link_recording, live_session, live_recording,
+                                            job["id"], log_destination)
                 return JSONResponse(job, status_code=201)
         except (ValueError, TypeError, ValidationError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         finally:
-            if destination is not None:
-                destination.unlink(missing_ok=True)
+            for path in (destination, log_destination):
+                if path is not None:
+                    path.unlink(missing_ok=True)
 
     @app.post("/api/captures", status_code=201)
     async def create_capture(request: Request):

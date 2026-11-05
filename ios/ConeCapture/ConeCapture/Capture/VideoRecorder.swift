@@ -49,6 +49,7 @@ final class VideoRecorder {
     private var droppedCount = 0
     private var encodedCount = 0
     private var elapsedSeconds: Double = 0
+    private var startTimestamp: TimeInterval?
 
     // writerQueue-only state.
     private var writer: AVAssetWriter?
@@ -70,6 +71,12 @@ final class VideoRecorder {
     var stats: (elapsed: Double, encoded: Int, dropped: Int) {
         lock.lock(); defer { lock.unlock() }
         return (elapsedSeconds, encodedCount, droppedCount)
+    }
+
+    /// ARFrame timestamp of encoded frame 0 (MP4 time zero), once the writer has started. Thread-safe.
+    var firstFrameTimestamp: TimeInterval? {
+        lock.lock(); defer { lock.unlock() }
+        return startTimestamp
     }
 
     // MARK: Session-queue entry point
@@ -195,6 +202,7 @@ final class VideoRecorder {
         self.input = input
         self.adaptor = adaptor
         self.firstTimestamp = ts
+        lock.lock(); startTimestamp = ts; lock.unlock()
     }
 
     // MARK: Finish

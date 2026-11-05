@@ -112,3 +112,20 @@ table.det tr.sel { background: #1d2a3f; }
   .btn { padding: 9px 14px; } .btn.small { padding: 7px 11px; }
 }
 .kp-size { width: 5em; margin-left: 4px; }
+
+/* ---------------- live ---------------- */
+.topbar nav { display: flex; gap: 16px; } .topbar nav a.current { color: var(--text); }
+.status.waiting { background: #222; color: #999; }
+.live-row { grid-template-columns: 1fr auto; }
+.live-badge { margin-left: 8px; }
+.rec-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rec-chip { font-size: 12px; border: 1px solid var(--line); border-radius: 99px; padding: 1px 9px; display: inline-flex; align-items: center; gap: 6px; }
+.rec-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); margin-right: 6px; }
+.rec-chip .rec-dot { margin-right: 0; }
+.lv-status { display: flex; flex-wrap: wrap; gap: 6px 22px; padding: 8px 14px; }
+.lv-chip { display: grid; gap: 0; }
+.lv-chip b { font-size: 13px; font-weight: 600; }
+.lv-chip .ok, .lv-chip .st-tracked { color: var(--ok); } .lv-chip .warn, .lv-chip .st-init { color: var(--warn); }
+.lv-chip .bad, .lv-chip .st-lost { color: var(--danger); } .lv-chip .rec-on { color: var(--danger); }
+.rec-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.tl-row select { max-width: 11em; }

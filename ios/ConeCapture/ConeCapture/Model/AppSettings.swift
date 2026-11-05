@@ -54,6 +54,9 @@ final class AppSettings: ObservableObject {
         static let captureName = "captureName"
         static let autoUpload = "autoUpload"
         static let deleteAfterUpload = "deleteAfterUpload"
+        static let liveStream = "liveStream"
+        static let liveConfidence = "liveConfidence"
+        static let liveKeypointCorrection = "liveKeypointCorrection"
     }
     private static let tokenAccount = "bearerToken"
 
@@ -67,6 +70,12 @@ final class AppSettings: ObservableObject {
     @Published var captureName: String { didSet { UserDefaults.standard.set(captureName, forKey: Key.captureName) } }
     @Published var autoUpload: Bool { didSet { UserDefaults.standard.set(autoUpload, forKey: Key.autoUpload) } }
     @Published var deleteAfterUpload: Bool { didSet { UserDefaults.standard.set(deleteAfterUpload, forKey: Key.deleteAfterUpload) } }
+    /// Live mode: stream results to the server's /api/live/ingest.
+    @Published var liveStream: Bool { didSet { UserDefaults.standard.set(liveStream, forKey: Key.liveStream) } }
+    /// Live mode: minimum detection confidence.
+    @Published var liveConfidence: Double { didSet { UserDefaults.standard.set(liveConfidence, forKey: Key.liveConfidence) } }
+    /// Live mode: refine cone keypoints before triangulating.
+    @Published var liveKeypointCorrection: Bool { didSet { UserDefaults.standard.set(liveKeypointCorrection, forKey: Key.liveKeypointCorrection) } }
 
     init() {
         let d = UserDefaults.standard
@@ -78,6 +87,9 @@ final class AppSettings: ObservableObject {
         captureName = d.string(forKey: Key.captureName) ?? ""
         autoUpload = d.object(forKey: Key.autoUpload) as? Bool ?? true
         deleteAfterUpload = d.object(forKey: Key.deleteAfterUpload) as? Bool ?? false
+        liveStream = d.object(forKey: Key.liveStream) as? Bool ?? true
+        liveConfidence = d.object(forKey: Key.liveConfidence) as? Double ?? 0.25
+        liveKeypointCorrection = d.object(forKey: Key.liveKeypointCorrection) as? Bool ?? true
 
         if VideoFormats.format(forID: formatID) == nil, let def = VideoFormats.defaultFormat {
             formatID = VideoFormats.id(def)

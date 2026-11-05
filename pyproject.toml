@@ -6,4 +6,5 @@ dependencies = [
     "gradio>=6,<7",
     "scipy>=1.15,<2",
     "ultralytics>=8.4.163",
+    "websockets>=17.4",
 ]

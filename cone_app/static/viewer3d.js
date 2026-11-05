@@ -53,7 +53,8 @@ export class Viewer {
   }
 
   // ---------------- data ----------------
-  setResult(result) {
+  // keepCamera: rebuild the scene but leave the orbit camera where it is (live mode re-sets the map repeatedly)
+  setResult(result, { keepCamera = false } = {}) {
     this.result = result;
     this.world.traverse((o) => { o.geometry?.dispose?.(); });
     this.world.clear();
@@ -62,7 +63,38 @@ export class Viewer {
     const [W, H] = result.image_size;
     this.imgSize = [W, H];
 
-    // poses
+    const firstValid = this.computePoses(frames);
+
+    // bounds: the grid covers just the cones and the camera's start; the camera fit uses the whole path
+    const gb = new THREE.Box3();
+    for (const l of result.landmarks || []) gb.expandByPoint(new THREE.Vector3(...l.p_world));
+    if (firstValid >= 0) gb.expandByPoint(this.camPos[firstValid]);
+    if (gb.isEmpty()) gb.set(new THREE.Vector3(-2, -2, 0), new THREE.Vector3(2, 2, 0));
+    this.gridBounds = gb;
+    this.updateBounds();
+
+    this.buildGrid(gb);
+    const axes = new THREE.AxesHelper(2); this.world.add(axes);
+    this.buildLandmarks(result);
+    this.buildTrajectory(frames);
+    this.buildFrustum();
+    this.buildLinks();
+    if (!keepCamera) this.fit(true);
+    this.setFrame(0);
+  }
+
+  // Live mode: replace only the frame list (poses, trajectory), keep landmarks. Shows the last frame.
+  updateFrames(frames) {
+    if (!this.result) return;
+    this.result.frames = frames;
+    this.computePoses(frames);
+    this.updateBounds();
+    for (const o of [this.trajDim, this.trajBright]) { this.world.remove(o); o.geometry.dispose(); }
+    this.buildTrajectory(frames);
+    this.setFrame(frames.length - 1);
+  }
+
+  computePoses(frames) {
     this.poses = frames.map((f) => {
       if (!f.T_world_cam) return null;
       const m = new THREE.Matrix4(); m.set(...f.T_world_cam.flat());
@@ -74,24 +106,13 @@ export class Viewer {
     for (let i = 0; i < frames.length; i++) { if (this.poses[i]) lv = i; this.lastValid.push(lv); }
     const firstValid = this.poses.findIndex(Boolean);
     if (firstValid > 0) for (let i = 0; i < firstValid; i++) this.lastValid[i] = firstValid;
+    return firstValid;
+  }
 
-    // bounds: the grid covers just the cones and the camera's start; the camera fit uses the whole path
-    const gb = new THREE.Box3();
-    for (const l of result.landmarks || []) gb.expandByPoint(new THREE.Vector3(...l.p_world));
-    if (firstValid >= 0) gb.expandByPoint(this.camPos[firstValid]);
-    if (gb.isEmpty()) gb.set(new THREE.Vector3(-2, -2, 0), new THREE.Vector3(2, 2, 0));
-    const bb = gb.clone();
+  updateBounds() {
+    const bb = this.gridBounds.clone();
     for (const p of this.camPos) if (p) bb.expandByPoint(p);
     this.bounds = bb;
-
-    this.buildGrid(gb);
-    const axes = new THREE.AxesHelper(2); this.world.add(axes);
-    this.buildLandmarks(result);
-    this.buildTrajectory(frames);
-    this.buildFrustum();
-    this.buildLinks();
-    this.fit(true);
-    this.setFrame(0);
   }
 
   buildGrid(bb) {
@@ -247,6 +268,7 @@ export class Viewer {
   setFrame(i) {
     if (!this.result) return;
     const frames = this.result.frames;
+    if (!frames.length) { this.frustum.visible = false; this.trajBright.geometry.setDrawRange(0, 0); this.dirty = true; return; }
     i = Math.max(0, Math.min(frames.length - 1, i));
     this.cur = i;
     const f = frames[i];
@@ -321,7 +343,7 @@ export class Viewer {
   }
 
   chaseTarget() {
-    const vi = this.lastValid[this.cur]; if (vi < 0) return null;
+    const vi = this.lastValid[this.cur]; if (!(vi >= 0)) return null;
     const M = this.poses[vi], p = this.camPos[vi];
     const e = M.elements;
     let fx = e[8], fy = e[9]; const n = Math.hypot(fx, fy) || 1; fx /= n; fy /= n;
@@ -342,7 +364,7 @@ export class Viewer {
   }
 
   applyThroughCamera() {
-    const vi = this.lastValid[this.cur]; if (vi < 0) return;
+    const vi = this.lastValid[this.cur]; if (!(vi >= 0)) return;
     const f = this.result.frames[this.cur], K = f.K, [W, H] = this.imgSize;
     const flip = new THREE.Matrix4().makeScale(1, -1, -1);
     this.camera.matrix.copy(this.poses[vi]).multiply(flip);

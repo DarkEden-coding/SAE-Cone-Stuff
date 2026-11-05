@@ -16,7 +16,7 @@ cone app serves.
 | Path | What it is |
 |---|---|
 | `cone_app/` | Processing server: FastAPI backend, keypoint → PnP → cone-only SLAM pipeline, Three.js 3D viewer |
-| `ios/ConeCapture/` | iPhone capture app: records photo/video with per-frame ARKit intrinsics and uploads to `cone_app` |
+| `ios/ConeCapture/` | iPhone capture app: records photo/video with per-frame ARKit intrinsics and uploads to `cone_app`. Live mode detects cones and runs cone-only SLAM on the phone (`ConeSLAM/` Swift package) and streams the results to `cone_app` |
 | `apps/gradio-viewer/` | Older Gradio app for box-only cone detection (blue/yellow) on images and videos (`web_view.py`) |
 | `apps/local-detector/` | Standalone Apple Silicon detector web app (YOLO26m CoreML, Basler camera input). Has its own `pyproject.toml` and venv; run `uv run server.py` from that folder. Weights in `models/` are not in git |
 | `training/` | BRT cone pose dataset preparation (`clean_`, `adjust_`, `augment_`), training (`train_*`, `run_*`), evaluation and benchmarking, and `cone_pose_predict.py` |
@@ -96,6 +96,15 @@ See [ios/ConeCapture/README.md](ios/ConeCapture/README.md). In short:
 `brew install xcodegen && cd ios/ConeCapture && xcodegen && open ConeCapture.xcodeproj`. Set the
 signing team, run it on the phone, and enter the server URL in Settings.
 
+### Live mode
+
+The iPhone app's Live mode runs detection (CoreML), per-cone localisation and a reduced cone-only SLAM on the
+phone, and streams poses, detections and the cone map to the server (`cone-live/1` in
+[cone_app/SPEC.md](cone_app/SPEC.md)). The web UI's **Live** page lists sessions, shows an active one in real
+time (3D map, camera, detections) and replays finished ones, synced to the video when a recording was
+uploaded. To try the viewer without a phone, run the server and then
+`uv run --locked python -m cone_app.tools.fake_live_phone --url ws://127.0.0.1:7870`.
+
 ### Accuracy and limitations
 
 - On synthetic renders, per-cone PnP has a median position error of about 1.4–1.7% of range. The keypoint
@@ -103,6 +112,9 @@ signing team, run it on the phone, and enter the server URL in Settings.
 - SLAM has only been validated in simulation. On a 225 m simulated drive the trajectory error was about
   0.15 m and the cone error about 0.12 m. There is **no loop closure**, so revisited cones can appear twice.
 - ARKit images are treated as pinhole (no distortion model).
+- Live mode has been tested in simulation and with a CoreML check on one real image; it has not yet been run
+  on the phone. On the simulated 134 m loop the on-device SLAM reaches 0.14 m trajectory error and 0.14 m cone
+  error at about 0.6 ms per frame (M5). Without the gravity prior the error grows to about 1.1 m.
 
 ## Older detector web view (`apps/gradio-viewer/web_view.py`)
 

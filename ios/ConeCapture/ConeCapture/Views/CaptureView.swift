@@ -15,8 +15,22 @@ struct CaptureView: View {
             let isPortrait = geometry.size.height > geometry.size.width
             ZStack {
                 Color.black.ignoresSafeArea()
-                ARPreview(session: capture.arSession) { level.interfaceOrientation = $0 }
-                    .ignoresSafeArea()
+                ARPreview(session: capture.arSession) { orientation, size in
+                    level.interfaceOrientation = orientation
+                    capture.setViewport(size, orientation: orientation)
+                }
+                .ignoresSafeArea()
+
+                if capture.mode == .live, let live = capture.live {
+                    LiveOverlayView(cones: live.cones)
+                        .ignoresSafeArea()
+                    MinimapView(snapshot: live.minimap)
+                        .frame(width: 160, height: 160)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(12)
+                        .onTapGesture(count: 2) { capture.resetLiveMap() }
+                        .accessibilityHint("Double tap to reset the live map")
+                }
 
                 hud
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -93,6 +107,17 @@ struct CaptureView: View {
             }
             Text("Focus: \(capture.focusLabel)")
             Text(String(format: "Level: roll %+.1f\u{00B0}  pitch %+.1f\u{00B0}", level.rollDegrees, level.pitchDegrees))
+            if capture.mode == .live {
+                if let live = capture.live {
+                    Text(String(format: "LIVE %@  %.1f fps  det %.0f ms  slam %.0f ms",
+                                live.status.rawValue, live.fps, live.detMs, live.slamMs))
+                        .foregroundStyle(live.status == .tracked || live.status == .initialized ? .green : .orange)
+                    Text("cones \(live.nLandmarks)  inliers \(live.nInliers)  skipped \(live.skipped)  \(streamLabel)")
+                } else {
+                    Text(capture.liveStarting ? "LIVE loading model\u{2026}" : "LIVE starting\u{2026}")
+                        .foregroundStyle(.orange)
+                }
+            }
             if capture.isRecording, let h = capture.hud {
                 Text("\u{25CF} REC \(Self.clock(h.recordElapsed))  enc \(h.encoded)  drop \(h.dropped)")
                     .foregroundStyle(.red)
@@ -102,6 +127,12 @@ struct CaptureView: View {
         .foregroundStyle(.white)
         .padding(8)
         .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var streamLabel: String {
+        guard settings.liveStream else { return "stream off" }
+        guard let streamer = capture.livePipeline?.streamer else { return "no server" }
+        return "stream \(streamer.state)"
     }
 
     private static func clock(_ s: Double) -> String {
@@ -146,7 +177,7 @@ struct CaptureView: View {
             ForEach(CaptureSession.Mode.allCases) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
-        .frame(width: 130)
+        .frame(width: 190)
         .disabled(capture.isRecording || capture.isBusy)
     }
 
@@ -178,12 +209,12 @@ struct CaptureView: View {
         Button {
             switch capture.mode {
             case .photo: capture.takePhoto()
-            case .video: capture.toggleRecording()
+            case .video, .live: capture.toggleRecording()
             }
         } label: {
             ZStack {
                 Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)
-                if capture.mode == .video {
+                if capture.mode != .photo {
                     RoundedRectangle(cornerRadius: capture.isRecording ? 6 : 28)
                         .fill(.red)
                         .frame(width: capture.isRecording ? 30 : 56, height: capture.isRecording ? 30 : 56)

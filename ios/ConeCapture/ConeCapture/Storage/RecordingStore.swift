@@ -17,6 +17,9 @@ struct Recording: Codable, Identifiable, Equatable {
     var errorMessage: String?
     var attempts: Int
     var mediaDeleted: Bool
+    /// Set for recordings made in live mode: the folder then also holds `live.jsonl`.
+    /// Optional, so older meta.json files decode unchanged.
+    var liveSessionID: String?
 }
 
 /// Documents/Recordings/<timestamp>/{video.mp4|photo.jpg, capture.json, meta.json}

@@ -24,12 +24,24 @@ struct CaptureView: View {
                 if capture.mode == .live, let live = capture.live {
                     LiveOverlayView(cones: live.cones)
                         .ignoresSafeArea()
-                    MinimapView(snapshot: live.minimap)
-                        .frame(width: 160, height: 160)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(12)
-                        .onTapGesture(count: 2) { capture.resetLiveMap() }
-                        .accessibilityHint("Double tap to reset the live map")
+                    VStack(alignment: .trailing, spacing: 8) {
+                        MinimapView(snapshot: live.minimap)
+                            .frame(width: 160, height: 160)
+                            .onTapGesture(count: 2) { capture.resetLiveMap() }
+                            .accessibilityHint("Double tap to reset the live map")
+                        Button {
+                            capture.resetLiveMap()
+                        } label: {
+                            Label("Reset map", systemImage: "arrow.counterclockwise")
+                                .font(.footnote.weight(.semibold))
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                .background(.black.opacity(0.55), in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                        .accessibilityLabel("Reset live map")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(12)
                 }
 
                 hud

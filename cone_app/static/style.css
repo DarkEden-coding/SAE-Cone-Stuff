@@ -71,7 +71,8 @@ summary { cursor: pointer; color: var(--muted); }
 .pane-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .stage { position: relative; width: 100%; aspect-ratio: var(--ar); max-height: 62vh; background: #000; border-radius: 6px; overflow: hidden; }
 .stage video, .stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-.stage canvas.preview { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* contain, like the video: the overlay canvas letterboxes image coordinates the same way (Overlay.rect) */
+.stage canvas.preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .stage canvas.overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .nomedia { position: absolute; left: 8px; top: 8px; font-size: 11px; color: #667; font-family: var(--mono); }
 .toggles, .vbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }

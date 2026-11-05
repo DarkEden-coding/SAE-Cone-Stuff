@@ -223,7 +223,7 @@ final class LivePipeline: @unchecked Sendable {   // state is lock- or queue-con
         pendingReset = false
         let skippedFrames = skipped
         lock.unlock()
-        if reset { slam.reset(); trail = [] }
+        if reset { slam.reset(); trail = []; lastMapT = -.infinity }   // send the empty map at once
         let rotation = config.rotation
         let bufferSize = PixelSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
         let imageSize = detector.imageSize
